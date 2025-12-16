@@ -1,0 +1,32 @@
+{
+  "name": "ai-trading-system",
+  "version": "1.0.0",
+  "description": "AI-Powered Stock Trading Analysis System with Real APIs",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node test.js"
+  },
+  "keywords": [
+    "trading",
+    "stocks",
+    "ai",
+    "analysis",
+    "finnhub",
+    "openai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "node-fetch": "^3.3.2",
+    "pg": "^8.16.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

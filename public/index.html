@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AI Trading MVP</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-white p-6">
+  <div class="max-w-5xl mx-auto space-y-6">
+    <div class="bg-white/10 rounded-2xl p-5">
+      <div class="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h1 class="text-2xl font-bold">AI Trading MVP</h1>
+          <p class="text-white/70 text-sm">Price + News + Bots Fight (MVP)</p>
+        </div>
+        <a class="text-sm underline" href="/api/health" target="_blank">API Health</a>
+      </div>
+    </div>
+
+    <div class="bg-white/10 rounded-2xl p-5 space-y-3">
+      <div class="flex gap-2">
+        <input id="sym" class="flex-1 rounded-xl p-3 text-black" placeholder="AAPL" />
+        <button onclick="runAll()" class="rounded-xl px-4 bg-indigo-500 font-semibold">Run</button>
+      </div>
+      <div class="text-xs text-white/60">Tip: try AAPL, NVDA, TSLA</div>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-6">
+      <div class="bg-white/10 rounded-2xl p-5">
+        <h2 class="font-bold mb-2">Analyze (AI)</h2>
+        <pre id="analyze" class="text-xs whitespace-pre-wrap text-white/80">—</pre>
+      </div>
+
+      <div class="bg-white/10 rounded-2xl p-5">
+        <h2 class="font-bold mb-2">Bots Fight</h2>
+        <pre id="bots" class="text-xs whitespace-pre-wrap text-white/80">—</pre>
+      </div>
+    </div>
+
+    <div class="bg-white/10 rounded-2xl p-5">
+      <h2 class="font-bold mb-2">News</h2>
+      <pre id="news" class="text-xs whitespace-pre-wrap text-white/80">—</pre>
+    </div>
+
+    <div class="bg-white/10 rounded-2xl p-5">
+      <h2 class="font-bold mb-2">Market Overview</h2>
+      <pre id="mkt" class="text-xs whitespace-pre-wrap text-white/80">Loading…</pre>
+    </div>
+  </div>
+
+  <script>
+    const API = window.location.origin;
+
+    async function j(url, opts) {
+      const r = await fetch(url, opts);
+      const t = await r.text();
+      try { return JSON.parse(t); } catch { return { raw: t }; }
+    }
+
+    async function loadMarket() {
+      const data = await j(`${API}/api/market-overview`);
+      document.getElementById("mkt").textContent = JSON.stringify(data, null, 2);
+    }
+
+    async function runAll() {
+      const s = (document.getElementById("sym").value || "AAPL").toUpperCase().trim();
+      document.getElementById("analyze").textContent = "Loading…";
+      document.getElementById("bots").textContent = "Loading…";
+      document.getElementById("news").textContent = "Loading…";
+
+      const [a, b, n] = await Promise.all([
+        j(`${API}/api/analyze/${s}`),
+        j(`${API}/api/bots/${s}`),
+        j(`${API}/api/news/${s}`)
+      ]);
+
+      document.getElementById("analyze").textContent = JSON.stringify(a, null, 2);
+      document.getElementById("bots").textContent = JSON.stringify(b, null, 2);
+      document.getElementById("news").textContent = JSON.stringify(n, null, 2);
+    }
+
+    loadMarket();
+  </script>
+</body>
+</html>
