@@ -28,6 +28,14 @@ app.use(express.static("public"));
 app.get("/", (req, res) => {
   res.sendFile(path.resolve("public", "index.html"));
 });
+app.get("/api/env-check", (req, res) => {
+  res.json({
+    FINNHUB_API_KEY: !!process.env.FINNHUB_API_KEY,
+    NEWS_API_KEY: !!process.env.NEWS_API_KEY,
+    OPENAI_API_KEY: !!process.env.OPENAI_API_KEY,
+    DATABASE_URL: !!process.env.DATABASE_URL
+  });
+});
 
 // ============================================
 // HELPERS: PRICES + NEWS + ANALYSIS
