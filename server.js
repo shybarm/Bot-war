@@ -1,3 +1,9 @@
+// ===============================
+//  AI Trading Arena - Multi Provider Engine
+//  Stock failover: Finnhub → TwelveData
+//  News failover: NewsData.io → NewsAPI
+// ===============================
+
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -21,20 +27,14 @@ import {
   getBotPositions,
   recordTrade,
   getRecentTrades,
-  getStrategyTrades,
-  upsertUniverseSymbols,
-  universeCount,
-  universeSample,
-  dbListTables,
-  dbDecisionCounts,
-  dbRecentDecisions
+  getStrategyTrades
 } from "./db.js";
 
 dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT) || 8080;
-const APP_VERSION = "arena-ui-trades-v3";
+const APP_VERSION = "arena-multiprovider-v1";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,77 +42,103 @@ const __dirname = path.dirname(__filename);
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
-/* ---------------- Learning speed ---------------- */
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
 
+// ------------------------------------------------------
+// Learning speed system
+// ------------------------------------------------------
 function normalizeSpeed(v) {
   const x = String(v || "").toLowerCase().trim();
-  if (x === "accelerated" || x === "fast" || x === "preview") return "accelerated";
+  if (["accelerated", "fast", "preview"].includes(x)) return "accelerated";
   return "realtime";
 }
 
 async function getLearningSpeed() {
   if (!hasDb()) return "realtime";
-  const v = await getSetting("learning_speed", "realtime");
-  return normalizeSpeed(v);
+  return normalizeSpeed(await getSetting("learning_speed", "realtime"));
 }
 
 function horizonsForSpeed(speed) {
-  if (speed === "accelerated") {
-    return { shortSec: 5 * 60, mediumSec: 30 * 60, longSec: 2 * 60 * 60 };
-  }
-  return { shortSec: 4 * 60 * 60, mediumSec: 3 * 24 * 60 * 60, longSec: 14 * 24 * 60 * 60 };
+  return speed === "accelerated"
+    ? { shortSec: 5 * 60, mediumSec: 30 * 60, longSec: 2 * 60 * 60 }
+    : { shortSec: 4 * 60 * 60, mediumSec: 3 * 24 * 60 * 60, longSec: 14 * 24 * 60 * 60 };
 }
 
-/* ---------------- External data ---------------- */
+// ------------------------------------------------------
+//  STOCK PROVIDERS
+// ------------------------------------------------------
 
+// ---- 1. FINNHUB PRIMARY ----
 async function finnhubQuote(symbol) {
-  if (!process.env.FINNHUB_API_KEY) {
-    const e = new Error("FINNHUB_API_KEY missing");
-    e.status = 400;
-    throw e;
-  }
-  const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${process.env.FINNHUB_API_KEY}`;
+  const key = process.env.FINNHUB_API_KEY;
+  if (!key) throw new Error("FINNHUB_API_KEY missing");
+
+  const url = `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${key}`;
   const r = await fetch(url);
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const e = new Error(`Finnhub error: ${r.status}`);
-    e.status = 502;
-    e.details = j;
-    throw e;
-  }
-  return { price: j.c, changePercent: j.dp, change: j.d };
+
+  if (!r.ok || !j.c) throw new Error("Finnhub error");
+
+  return {
+    provider: "finnhub",
+    price: j.c,
+    changePercent: j.dp || 0,
+    change: j.d || 0
+  };
 }
 
-async function finnhubSymbols(exchange = "US") {
-  if (!process.env.FINNHUB_API_KEY) {
-    const e = new Error("FINNHUB_API_KEY missing");
-    e.status = 400;
-    throw e;
-  }
-  const url = `https://finnhub.io/api/v1/stock/symbol?exchange=${encodeURIComponent(exchange)}&token=${process.env.FINNHUB_API_KEY}`;
+// ---- 2. TWELVEDATA FALLBACK (/price endpoint) ----
+async function twelveDataQuote(symbol) {
+  const key = process.env.TWELVEDATA_API_KEY;
+  if (!key) throw new Error("TWELVEDATA_API_KEY missing");
+
+  const url = `https://api.twelvedata.com/price?symbol=${symbol}&apikey=${key}`;
   const r = await fetch(url);
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const e = new Error(`Finnhub symbols error: ${r.status}`);
-    e.status = 502;
-    e.details = j;
-    throw e;
-  }
-  if (!Array.isArray(j)) {
-    const e = new Error("Finnhub symbols: unexpected response");
-    e.status = 502;
-    e.details = j;
-    throw e;
-  }
-  return j;
+
+  if (!r.ok || !j.price) throw new Error("TwelveData error");
+
+  return {
+    provider: "twelvedata",
+    price: Number(j.price),
+    changePercent: 0,
+    change: 0
+  };
 }
 
-// simple keyword sentiment (placeholder)
+// ---- UNIFIED STOCK QUOTE FAILOVER ----
+async function getStockQuote(symbol) {
+  const errors = [];
+
+  // Try Finnhub first
+  try {
+    return await finnhubQuote(symbol);
+  } catch (e) {
+    errors.push("Finnhub: " + e.message);
+  }
+
+  // Try TwelveData next
+  try {
+    return await twelveDataQuote(symbol);
+  } catch (e) {
+    errors.push("TwelveData: " + e.message);
+  }
+
+  throw new Error("Both stock providers failed → " + errors.join(" | "));
+}
+
+// ------------------------------------------------------
+//  NEWS PROVIDERS
+// ------------------------------------------------------
+
+// → Sentiment helper
 function sentimentScore(text) {
-  const pos = ["surge","growth","profit","beat","strong","record","upgrade","bullish","gain","rise"];
-  const neg = ["drop","loss","miss","weak","concern","downgrade","bearish","fall","decline"];
+  const pos = ["surge", "growth", "profit", "beat", "strong", "record", "upgrade", "bullish"];
+  const neg = ["drop", "loss", "miss", "weak", "concern", "downgrade", "bearish"];
+
   const t = (text || "").toLowerCase();
   let s = 0;
   pos.forEach(w => { if (t.includes(w)) s += 0.1; });
@@ -120,106 +146,93 @@ function sentimentScore(text) {
   return Math.max(-1, Math.min(1, s));
 }
 
-async function newsFor(symbol) {
-  // IMPORTANT: If your provider is not newsapi.org, this can 401.
-  // We will catch failures where it is called and continue without news.
-  if (!process.env.NEWS_API_KEY) {
-    const e = new Error("NEWS_API_KEY missing");
-    e.status = 400;
-    throw e;
-  }
+// ---- 1. NEWSDATA.IO PRIMARY ----
+async function newsdataNews(symbol) {
+  const key = process.env.NEWSDATA_API_KEY;
+  if (!key) throw new Error("NEWSDATA_API_KEY missing");
 
-  const today = new Date();
-  const weekAgo = new Date(Date.now() - 7 * 864e5);
-  const to = today.toISOString().slice(0, 10);
-  const from = weekAgo.toISOString().slice(0, 10);
-
-  const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(symbol)}&from=${from}&to=${to}&sortBy=relevancy&apiKey=${process.env.NEWS_API_KEY}`;
-
+  const url = `https://newsdata.io/api/1/news?apikey=${key}&q=${symbol}&language=en`;
   const r = await fetch(url);
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const e = new Error(`News provider error: ${r.status}`);
-    e.status = 502;
-    e.details = j;
-    throw e;
-  }
 
-  return (j.articles || []).slice(0, 8).map(a => ({
+  if (!r.ok || !j.results) throw new Error("NewsData error");
+
+  return j.results.slice(0, 8).map(n => ({
+    provider: "newsdata",
+    title: n.title,
+    description: n.description,
+    url: n.link,
+    publishedAt: n.pubDate,
+    source: n.source_id,
+    sentiment: sentimentScore(n.title + " " + n.description)
+  }));
+}
+
+// ---- 2. NEWSAPI BACKUP ----
+async function newsapiNews(symbol) {
+  const key = process.env.NEWSAPI_BACKUP_KEY;
+  if (!key) throw new Error("NEWSAPI_BACKUP_KEY missing");
+
+  const url = `https://newsapi.org/v2/everything?q=${symbol}&language=en&sortBy=relevancy&apiKey=${key}`;
+  const r = await fetch(url);
+  const j = await r.json().catch(() => ({}));
+
+  if (!r.ok || !j.articles) throw new Error("NewsAPI error");
+
+  return j.articles.slice(0, 8).map(a => ({
+    provider: "newsapi",
     title: a.title,
     description: a.description,
     url: a.url,
     publishedAt: a.publishedAt,
-    source: a.source?.name || "Unknown",
-    sentiment: sentimentScore(`${a.title || ""} ${a.description || ""}`)
+    source: a.source?.name,
+    sentiment: sentimentScore(a.title + " " + a.description)
   }));
 }
 
-/* ---------------- Learning evaluation ---------------- */
+// ---- UNIFIED NEWS FAILOVER ----
+async function getNewsBundle(symbol) {
+  const errors = [];
 
-async function evaluateDueDecisions(limit = 25) {
-  if (!hasDb()) return { evaluated: 0, stored: 0, reason: "no_db" };
+  try { return await newsdataNews(symbol); }
+  catch (e) { errors.push("NewsData: " + e.message); }
 
-  let due = [];
-  try {
-    due = await getDueDecisions(limit);
-  } catch (e) {
-    return { evaluated: 0, stored: 0, reason: `db_unavailable: ${e.message}` };
-  }
+  try { return await newsapiNews(symbol); }
+  catch (e) { errors.push("NewsAPI: " + e.message); }
 
-  let evaluated = 0;
-  let stored = 0;
-
-  for (const d of due) {
-    try {
-      const q = await finnhubQuote(d.symbol);
-      const updated = await markDecisionEvaluated({ id: d.id, priceAfter: q.price });
-      evaluated += 1;
-
-      if (updated && typeof updated.price_after === "number") {
-        await insertLearningEvent({
-          symbol: updated.symbol,
-          strategy: updated.strategy,
-          horizon: updated.horizon,
-          signal: updated.signal,
-          priceAtSignal: updated.price_at_signal,
-          priceAfter: updated.price_after
-        });
-        stored += 1;
-      }
-    } catch {
-      // keep going
-    }
-  }
-
-  return { evaluated, stored };
+  throw new Error("Both news providers failed → " + errors.join(" | "));
 }
 
-/* ---------------- Bot logic ---------------- */
+// ------------------------------------------------------
+// Bot System
+// ------------------------------------------------------
 
 function computeFeatures(quote, news) {
-  const avgSent = news.length ? (news.reduce((a, n) => a + (n.sentiment || 0), 0) / news.length) : 0;
-  return { avgSent, changePercent: quote.changePercent || 0 };
+  const avgSent = news.length ? news.reduce((a, n) => a + n.sentiment, 0) / news.length : 0;
+  return {
+    avgSent,
+    changePercent: quote.changePercent
+  };
 }
 
 function botSignal(strategy, features) {
   const { avgSent, changePercent } = features;
 
   if (strategy === "sp500_long") {
-    if (avgSent > 0.15) return { signal: "BUY", horizon: "long", rationale: "Positive sentiment; long horizon accumulation" };
-    if (avgSent < -0.15) return { signal: "SELL", horizon: "long", rationale: "Negative sentiment; long horizon de-risk" };
-    return { signal: "HOLD", horizon: "long", rationale: "Mixed sentiment; wait for clarity" };
+    if (avgSent > 0.15) return { signal: "BUY", horizon: "long", rationale: "Positive long-term sentiment" };
+    if (avgSent < -0.15) return { signal: "SELL", horizon: "long", rationale: "Negative long-term sentiment" };
+    return { signal: "HOLD", horizon: "long", rationale: "Mixed long-term signals" };
   }
 
   if (strategy === "market_swing") {
-    if (avgSent > 0.1 && changePercent > 0) return { signal: "BUY", horizon: "medium", rationale: "Sentiment + momentum alignment" };
-    if (avgSent < -0.1 && changePercent < 0) return { signal: "SELL", horizon: "medium", rationale: "Down momentum + negative sentiment" };
+    if (avgSent > 0.1 && changePercent > 0) return { signal: "BUY", horizon: "medium", rationale: "Sentiment + momentum" };
+    if (avgSent < -0.1 && changePercent < 0) return { signal: "SELL", horizon: "medium", rationale: "Negative momentum" };
     return { signal: "HOLD", horizon: "medium", rationale: "No clean swing setup" };
   }
 
-  if (changePercent > 1.2) return { signal: "BUY", horizon: "short", rationale: "Strong intraday move (momentum scalp)" };
-  if (changePercent < -1.2) return { signal: "SELL", horizon: "short", rationale: "Sharp intraday weakness (risk-off scalp)" };
-  return { signal: "HOLD", horizon: "short", rationale: "Noise range; avoid overtrading" };
+  if (changePercent > 1.2) return { signal: "BUY", horizon: "short", rationale: "Intraday strength" };
+  if (changePercent < -1.2) return { signal: "SELL", horizon: "short", rationale: "Intraday weakness" };
+  return { signal: "HOLD", horizon: "short", rationale: "No volatility edge" };
 }
 
 function buyBudgetPct(strategy) {
@@ -228,301 +241,182 @@ function buyBudgetPct(strategy) {
   return 0.15;
 }
 
-async function scoreBots(symbol, bots) {
-  const scored = [];
+// ------------------------------------------------------
+// Evaluate old decisions (learning)
+// ------------------------------------------------------
 
-  for (const b of bots) {
-    let stats = { samples: 0, accuracy: 0 };
+async function evaluateDueDecisions(limit = 25) {
+  if (!hasDb()) return { evaluated: 0, stored: 0 };
+
+  const due = await getDueDecisions(limit);
+  let evaluated = 0;
+  let stored = 0;
+
+  for (const d of due) {
     try {
-      stats = await getStrategyAccuracy({ symbol, strategy: b.strategy, horizon: b.horizon, limit: 50 });
-    } catch {
-      stats = { samples: 0, accuracy: 0 };
-    }
+      const q = await getStockQuote(d.symbol);
+      const updated = await markDecisionEvaluated({ id: d.id, priceAfter: q.price });
+      evaluated++;
 
-    const historical = stats.samples ? stats.accuracy : 50;
-    const confidence = Math.round(0.6 * b.baseConfidence + 0.4 * historical);
-
-    scored.push({
-      ...b,
-      historicalAccuracy: historical,
-      samples: stats.samples,
-      confidence
-    });
+      if (updated) {
+        await insertLearningEvent({
+          symbol: updated.symbol,
+          strategy: updated.strategy,
+          horizon: updated.horizon,
+          signal: updated.signal,
+          priceAtSignal: updated.price_at_signal,
+          priceAfter: updated.price_after
+        });
+        stored++;
+      }
+    } catch {}
   }
 
-  scored.sort((a, b) => b.confidence - a.confidence);
-  return { bots: scored, winner: scored[0]?.strategy || null };
+  return { evaluated, stored };
 }
 
-/* ---------------- Core API ---------------- */
+// ------------------------------------------------------
+// API — Bot Fight
+// ------------------------------------------------------
 
-app.get("/api/version", (req, res) => {
-  res.json({ version: APP_VERSION, timestamp: new Date().toISOString() });
-});
-
-app.get("/api/health", async (req, res) => {
-  const learningSpeed = await getLearningSpeed();
-  const exchange = await getSetting("universe_exchange", "US");
-  const lastRefresh = await getSetting("universe_last_refresh", null);
-
-  res.json({
-    status: "ok",
-    version: APP_VERSION,
-    timestamp: new Date().toISOString(),
-    apis: {
-      finnhub: !!process.env.FINNHUB_API_KEY,
-      newsApi: !!process.env.NEWS_API_KEY,
-      postgres: hasDb()
-    },
-    learningSpeed,
-    universe: { exchange, lastRefresh }
-  });
-});
-
-app.get("/api/settings", async (req, res) => {
-  const learningSpeed = await getLearningSpeed();
-  res.json({ learningSpeed });
-});
-
-app.post("/api/settings/learning-speed", async (req, res) => {
+app.get("/api/fight/:symbol", async (req, res) => {
   try {
-    if (!hasDb()) return res.status(400).json({ error: "DATABASE_URL missing" });
-    const speed = normalizeSpeed(req.body?.learningSpeed);
-    await setSetting("learning_speed", speed);
-    res.json({ ok: true, learningSpeed: speed });
+    const symbol = req.params.symbol.toUpperCase();
+    const speed = await getLearningSpeed();
+    const horizons = horizonsForSpeed(speed);
+
+    if (hasDb()) await ensureBotAccounts({ startingCash: 100000, targetCash: 150000 });
+
+    // 1) quote with failover
+    const quote = await getStockQuote(symbol);
+
+    // 2) news with failover (non-blocking)
+    let news = [];
+    let newsError = null;
+    try {
+      news = await getNewsBundle(symbol);
+    } catch (e) {
+      newsError = e.message;
+      news = [];
+    }
+
+    // 3) compute features
+    const features = computeFeatures(quote, news);
+
+    const strategies = ["sp500_long", "market_swing", "day_trade"];
+    const rawBots = strategies.map(s => {
+      const sig = botSignal(s, features);
+      return {
+        strategy: s,
+        signal: sig.signal,
+        horizon: sig.horizon,
+        rationale: sig.rationale,
+        baseConfidence: 60
+      };
+    });
+
+    // 4) log decisions (learning)
+    if (hasDb()) {
+      await Promise.all(
+        rawBots.map(b =>
+          logBotDecision({
+            symbol,
+            strategy: b.strategy,
+            horizon: b.horizon,
+            signal: b.signal,
+            priceAtSignal: quote.price,
+            evalAfterSec: horizons[b.horizon]
+          })
+        )
+      );
+    }
+
+    // 5) execute trades
+    let trades = [];
+    if (hasDb()) {
+      const bots = await getBotAccounts();
+      const botMap = Object.fromEntries(bots.map(b => [b.strategy, b]));
+
+      for (const b of rawBots) {
+        const acc = botMap[b.strategy];
+        const note = `signal=${b.signal}; sentiment=${features.avgSent.toFixed(2)}; rationale=${b.rationale}`;
+
+        // BUY
+        if (b.signal === "BUY") {
+          const budget = acc.cash * buyBudgetPct(b.strategy);
+          if (budget > 50) {
+            const qty = budget / quote.price;
+            await recordTrade({ strategy: b.strategy, symbol, side: "BUY", qty, price: quote.price, note });
+            trades.push({ strategy: b.strategy, side: "BUY", symbol, qty, price: quote.price, note });
+          }
+        }
+
+        // SELL
+        if (b.signal === "SELL") {
+          const positions = await getBotPositions(b.strategy);
+          const pos = positions.find(p => p.symbol === symbol);
+          if (pos && pos.qty > 0) {
+            await recordTrade({
+              strategy: b.strategy,
+              symbol,
+              side: "SELL",
+              qty: pos.qty,
+              price: quote.price,
+              note
+            });
+            trades.push({ strategy: b.strategy, side: "SELL", symbol, qty: pos.qty, price: quote.price, note });
+          }
+        }
+      }
+    }
+
+    // 6) output for UI
+    res.json({
+      symbol,
+      quote,
+      features,
+      news,
+      newsError,
+      trades,
+      version: APP_VERSION
+    });
+
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// News endpoint can still exist, but fight endpoint will not depend on it succeeding
-app.get("/api/news/:symbol", async (req, res) => {
-  try {
-    const symbol = req.params.symbol.toUpperCase();
-    const news = await newsFor(symbol);
-    res.json({ symbol, news });
-  } catch (e) {
-    res.status(e.status || 500).json({ error: e.message, details: e.details || null, news: [] });
-  }
-});
-
-/* ---------------- ✅ Bot Fight endpoint (robust) ---------------- */
-
-app.get("/api/fight/:symbol", async (req, res) => {
-  try {
-    if (!hasDb()) return res.status(400).json({ error: "DATABASE_URL missing (fight requires persistence)" });
-
-    const symbol = req.params.symbol.toUpperCase();
-    const learningSpeed = await getLearningSpeed();
-    const horizons = horizonsForSpeed(learningSpeed);
-
-    await ensureBotAccounts({ startingCash: 100000, targetCash: 150000 });
-
-    // evaluate old decisions (learning)
-    await evaluateDueDecisions(50);
-
-    // Quote must succeed
-    const quote = await finnhubQuote(symbol);
-
-    // News is optional (never block the fight)
-    let news = [];
-    let newsError = null;
-    try {
-      news = await newsFor(symbol);
-    } catch (e) {
-      news = [];
-      newsError = e.message;
-    }
-
-    const features = computeFeatures(quote, news);
-
-    const strategies = ["sp500_long", "market_swing", "day_trade"];
-    const botsRaw = strategies.map((strategy) => {
-      const s = botSignal(strategy, features);
-      return {
-        strategy,
-        signal: s.signal,
-        horizon: s.horizon,
-        rationale: s.rationale,
-        baseConfidence: 55 + Math.round(Math.min(20, Math.abs(features.avgSent) * 100))
-      };
-    });
-
-    // log decisions
-    const secByH = { short: horizons.shortSec, medium: horizons.mediumSec, long: horizons.longSec };
-    await Promise.all(
-      botsRaw.map((b) =>
-        logBotDecision({
-          symbol,
-          strategy: b.strategy,
-          horizon: b.horizon,
-          signal: b.signal,
-          priceAtSignal: quote.price,
-          evalAfterSec: secByH[b.horizon] ?? horizons.mediumSec,
-        })
-      )
-    );
-
-    // execute trades (attach rationale into the trade note)
-    const accounts = await getBotAccounts();
-    const accountBy = Object.fromEntries(accounts.map(a => [a.strategy, a]));
-
-    const trades = [];
-
-    for (const b of botsRaw) {
-      const acc = accountBy[b.strategy];
-      if (!acc) continue;
-
-      const note = `signal=${b.signal}; horizon=${b.horizon}; rationale=${b.rationale}`;
-
-      if (b.signal === "BUY") {
-        const pct = buyBudgetPct(b.strategy);
-        const budget = Math.max(0, acc.cash * pct);
-        const qty = budget / quote.price;
-
-        if (budget >= 200) {
-          await recordTrade({ strategy: b.strategy, symbol, side: "BUY", qty, price: quote.price, note });
-          trades.push({ strategy: b.strategy, side: "BUY", symbol, qty, price: quote.price, note });
-        }
-      }
-
-      if (b.signal === "SELL") {
-        const positions = await getBotPositions(b.strategy);
-        const pos = positions.find(x => x.symbol === symbol);
-        if (pos && pos.qty > 0.0000001) {
-          await recordTrade({ strategy: b.strategy, symbol, side: "SELL", qty: pos.qty, price: quote.price, note });
-          trades.push({ strategy: b.strategy, side: "SELL", symbol, qty: pos.qty, price: quote.price, note });
-        }
-      }
-    }
-
-    // portfolio snapshot + progress bars
-    const updatedAccounts = await getBotAccounts();
-    const status = [];
-
-    for (const a of updatedAccounts) {
-      const positions = await getBotPositions(a.strategy);
-
-      let positionsValue = 0;
-      for (const p of positions) {
-        try {
-          const q = await finnhubQuote(p.symbol);
-          positionsValue += (p.qty * q.price);
-        } catch {}
-      }
-
-      const equity = a.cash + positionsValue;
-      const progressPct = ((equity - a.starting_cash) / (a.target_cash - a.starting_cash)) * 100;
-
-      status.push({
-        strategy: a.strategy,
-        cash: a.cash,
-        positions,
-        positionsValue,
-        equity,
-        startingCash: a.starting_cash,
-        targetCash: a.target_cash,
-        progressPct: Math.max(0, Math.min(100, Number(progressPct.toFixed(2))))
-      });
-    }
-
-    const scored = await scoreBots(symbol, botsRaw);
-
-    res.json({
-      symbol,
-      learningSpeed,
-      horizons,
-      quote,
-      features,
-      bots: scored.bots,
-      winner: scored.winner,
-      trades,
-      status,
-      news,
-      newsError
-    });
-  } catch (e) {
-    res.status(e.status || 500).json({ error: e.message, details: e.details || null });
-  }
-});
-
-/* ---------------- Trades + Portfolio endpoints ---------------- */
+// ------------------------------------------------------
+// Trades & diagnostics
+// ------------------------------------------------------
 
 app.get("/api/trades/recent", async (req, res) => {
   try {
-    if (!hasDb()) return res.status(400).json({ error: "DATABASE_URL missing" });
-    const limit = Math.min(200, Math.max(5, Number(req.query.limit || 50)));
-    const rows = await getRecentTrades({ limit });
+    const rows = await getRecentTrades({ limit: 50 });
     res.json({ ok: true, rows });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-app.get("/api/trades/:strategy", async (req, res) => {
-  try {
-    if (!hasDb()) return res.status(400).json({ error: "DATABASE_URL missing" });
-    const strategy = String(req.params.strategy || "").trim();
-    const limit = Math.min(200, Math.max(5, Number(req.query.limit || 50)));
-    const rows = await getStrategyTrades({ strategy, limit });
-    res.json({ ok: true, strategy, rows });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get("/api/portfolio", async (req, res) => {
-  try {
-    if (!hasDb()) return res.status(400).json({ error: "DATABASE_URL missing" });
-    const accounts = await getBotAccounts();
-    const out = [];
-    for (const a of accounts) {
-      const positions = await getBotPositions(a.strategy);
-      out.push({ ...a, positions });
-    }
-    res.json({ ok: true, accounts: out });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-/* ---------------- Debug endpoints ---------------- */
-
-app.get("/api/learning/summary/:symbol", async (req, res) => {
-  try { res.json(await getLearningSummary({ symbol: req.params.symbol.toUpperCase(), limit: 200 })); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.get("/api/db/tables", async (req, res) => {
-  try { res.json(await dbListTables()); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.get("/api/db/decision-counts/:symbol", async (req, res) => {
-  try { res.json(await dbDecisionCounts(req.params.symbol.toUpperCase())); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.get("/api/db/recent-decisions/:symbol", async (req, res) => {
-  try { res.json(await dbRecentDecisions(req.params.symbol.toUpperCase(), 10)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-/* ---------------- Start ---------------- */
+// ------------------------------------------------------
+// Start server
+// ------------------------------------------------------
 
 async function start() {
   try {
     await initDb();
     if (hasDb()) {
-      await ensureBotAccounts({ startingCash: 100000, targetCash: 150000 });
       const s = await getSetting("learning_speed", null);
       if (!s) await setSetting("learning_speed", "realtime");
     }
   } catch (e) {
-    console.error("startup error:", e.message);
+    console.error("Startup error:", e.message);
   }
 
-  app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server listening on ${PORT}`));
+  app.listen(PORT, "0.0.0.0", () =>
+    console.log(`🚀 AI Arena multiprovider server running on ${PORT}`)
+  );
 }
 
 start();
