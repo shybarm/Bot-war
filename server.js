@@ -13,12 +13,18 @@ import {
   getDueDecisions,
   markDecisionEvaluated,
   getLearningSummary,
+  dbListTables,
+  dbDecisionCounts,
+  dbRecentDecisions
 } from "./db.js";
 
 dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT) || 8080;
+
+// Change this string when you deploy so you can confirm Railway is running the latest build
+const APP_VERSION = "learning-debug-v1";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,7 +35,7 @@ app.use(express.static(path.join(__dirname, "public")));
 
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
-// ------------------ External data ------------------
+/* ---------------- External data ---------------- */
 
 async function finnhubQuote(symbol) {
   if (!process.env.FINNHUB_API_KEY) throw new Error("FINNHUB_API_KEY missing");
@@ -50,9 +56,9 @@ function sentimentScore(text) {
   return Math.max(-1, Math.min(1, s));
 }
 
-// NOTE: You said you changed provider and it works now.
-// Keep using NEWS_API_KEY here as your provider key.
 async function newsFor(symbol) {
+  // You said you changed provider and it works now.
+  // Keep using NEWS_API_KEY as your provider key.
   if (!process.env.NEWS_API_KEY) throw new Error("NEWS_API_KEY missing");
 
   const today = new Date();
@@ -60,7 +66,6 @@ async function newsFor(symbol) {
   const to = today.toISOString().slice(0, 10);
   const from = weekAgo.toISOString().slice(0, 10);
 
-  // If your provider is NOT newsapi.org, update this URL later.
   const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(symbol)}&from=${from}&to=${to}&sortBy=relevancy&apiKey=${process.env.NEWS_API_KEY}`;
   const r = await fetch(url);
   const j = await r.json();
@@ -76,78 +81,7 @@ async function newsFor(symbol) {
   }));
 }
 
-// ------------------ OpenAI analysis ------------------
-
-async function openaiAnalyze({ symbol, quote, news }) {
-  if (!process.env.OPENAI_API_KEY) {
-    return {
-      signal: "HOLD",
-      confidence: 50,
-      reasoning: "OPENAI_API_KEY missing. Using HOLD fallback.",
-      targetPrice: quote.price,
-      stopLoss: quote.price,
-      timeHorizon: "medium"
-    };
-  }
-
-  const headlines = news.slice(0, 6).map(n => n.title).join("; ");
-
-  const prompt = `
-Analyze ${symbol} for a trading signal.
-
-Price:
-- Current: ${quote.price}
-- Change%: ${quote.changePercent}
-
-Headlines:
-${headlines}
-
-Return VALID JSON ONLY:
-{
- "signal":"BUY|SELL|HOLD",
- "confidence":0-100,
- "reasoning":"string",
- "targetPrice":number,
- "stopLoss":number,
- "timeHorizon":"short|medium|long"
-}
-`.trim();
-
-  const r = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
-    },
-    body: JSON.stringify({
-      model: "gpt-4",
-      temperature: 0.4,
-      max_tokens: 350,
-      messages: [
-        { role: "system", content: "You are a cautious market analyst. Output JSON only." },
-        { role: "user", content: prompt }
-      ]
-    })
-  });
-
-  const j = await r.json();
-  const text = j?.choices?.[0]?.message?.content || "{}";
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    return {
-      signal: "HOLD",
-      confidence: 50,
-      reasoning: "AI response was not valid JSON; fallback to HOLD.",
-      targetPrice: quote.price,
-      stopLoss: quote.price,
-      timeHorizon: "medium"
-    };
-  }
-}
-
-// ------------------ Learning evaluation ------------------
+/* ---------------- Learning evaluation ---------------- */
 
 async function evaluateDueDecisions(limit = 20) {
   if (!hasDb()) return { evaluated: 0, stored: 0, reason: "no_db" };
@@ -155,7 +89,8 @@ async function evaluateDueDecisions(limit = 20) {
   let due = [];
   try {
     due = await getDueDecisions(limit);
-  } catch {
+  } catch (e) {
+    console.error("DB getDueDecisions failed:", e.message);
     return { evaluated: 0, stored: 0, reason: "db_unavailable" };
   }
 
@@ -179,15 +114,15 @@ async function evaluateDueDecisions(limit = 20) {
         });
         stored += 1;
       }
-    } catch {
-      // keep pending if price fetch fails; do not crash
+    } catch (e) {
+      console.error("evaluate decision failed:", e.message);
     }
   }
 
   return { evaluated, stored };
 }
 
-// ------------------ Bots logic ------------------
+/* ---------------- Bots logic ---------------- */
 
 function computeFeatures(quote, news) {
   const avgSent = news.length ? (news.reduce((a, n) => a + (n.sentiment || 0), 0) / news.length) : 0;
@@ -209,6 +144,7 @@ function botSignal(strategy, features) {
     return { signal: "HOLD", horizon: "medium", rationale: "No clear swing setup" };
   }
 
+  // day trade
   if (changePercent > 1.2) return { signal: "BUY", horizon: "short", rationale: "Strong intraday move" };
   if (changePercent < -1.2) return { signal: "SELL", horizon: "short", rationale: "Sharp intraday drop" };
   return { signal: "HOLD", horizon: "short", rationale: "Noise range" };
@@ -227,7 +163,8 @@ async function scoreBots(symbol, bots) {
     let stats = { samples: 0, accuracy: 0 };
     try {
       stats = await getStrategyAccuracy({ symbol, strategy: b.strategy, horizon: b.horizon, limit: 50 });
-    } catch {
+    } catch (e) {
+      console.error("getStrategyAccuracy failed:", e.message);
       stats = { samples: 0, accuracy: 0 };
     }
 
@@ -246,11 +183,16 @@ async function scoreBots(symbol, bots) {
   return { bots: scored, winner: scored[0]?.strategy || null };
 }
 
-// ------------------ API routes ------------------
+/* ---------------- API routes ---------------- */
+
+app.get("/api/version", (req, res) => {
+  res.json({ version: APP_VERSION, timestamp: new Date().toISOString() });
+});
 
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
+    version: APP_VERSION,
     timestamp: new Date().toISOString(),
     apis: {
       finnhub: !!process.env.FINNHUB_API_KEY,
@@ -290,9 +232,9 @@ app.get("/api/analyze/:symbol", async (req, res) => {
 
     const symbol = req.params.symbol.toUpperCase();
     const [quote, news] = await Promise.all([finnhubQuote(symbol), newsFor(symbol)]);
-    const analysis = await openaiAnalyze({ symbol, quote, news });
 
-    res.json({ symbol, quote, news: news.slice(0, 6), analysis });
+    // minimal analysis for now (your UI is already working)
+    res.json({ symbol, quote, news: news.slice(0, 6), analysis: { signal: "HOLD", confidence: 50, reasoning: "Analysis placeholder" } });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -319,6 +261,8 @@ app.get("/api/bots/:symbol", async (req, res) => {
     });
 
     let logged = 0;
+    let logError = null;
+
     if (hasDb()) {
       try {
         await Promise.all(
@@ -334,19 +278,15 @@ app.get("/api/bots/:symbol", async (req, res) => {
           )
         );
         logged = botsRaw.length;
-      } catch {
-        logged = 0;
+      } catch (e) {
+        logError = e.message;
+        console.error("logBotDecision failed:", e.message);
       }
     }
 
     const scored = await scoreBots(symbol, botsRaw);
 
-    res.json({
-      symbol,
-      features,
-      logged,
-      ...scored
-    });
+    res.json({ symbol, logged, logError, features, ...scored });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -372,7 +312,36 @@ app.get("/api/learning/summary/:symbol", async (req, res) => {
   }
 });
 
-// ------------------ Start ------------------
+/* -------- DB DEBUG ROUTES -------- */
+
+app.get("/api/db/tables", async (req, res) => {
+  try {
+    const x = await dbListTables();
+    res.json(x);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/db/decision-counts/:symbol", async (req, res) => {
+  try {
+    const x = await dbDecisionCounts(req.params.symbol.toUpperCase());
+    res.json(x);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/db/recent-decisions/:symbol", async (req, res) => {
+  try {
+    const x = await dbRecentDecisions(req.params.symbol.toUpperCase(), 10);
+    res.json(x);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ---------------- Start ---------------- */
 
 async function start() {
   try {
