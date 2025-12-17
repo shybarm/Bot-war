@@ -59,10 +59,8 @@ export async function initDb() {
       horizon TEXT NOT NULL,
       signal TEXT NOT NULL,
       price_at_signal DOUBLE PRECISION NOT NULL,
-
       eval_after_sec INTEGER NOT NULL,
       due_at TIMESTAMPTZ NOT NULL,
-
       evaluated_at TIMESTAMPTZ,
       price_after DOUBLE PRECISION,
       outcome_pct DOUBLE PRECISION
@@ -195,29 +193,18 @@ export async function markDecisionEvaluated({ id, priceAfter }) {
 export async function getLearningSummary({ symbol, limit = 200 }) {
   const p = getPool();
   if (!p) {
-    return {
-      hasDb: false,
-      symbol: symbol?.toUpperCase?.() || symbol,
-      pending: 0,
-      evaluated: 0,
-      samplesByStrategy: {},
-      accuracyByStrategy: {}
-    };
+    return { hasDb: false, symbol, pending: 0, evaluated: 0, samplesByStrategy: {}, accuracyByStrategy: {} };
   }
 
   const sym = symbol.toUpperCase();
 
   const pendingQ = await p.query(
-    `SELECT COUNT(*)::int AS n
-     FROM bot_decisions
-     WHERE symbol=$1 AND evaluated_at IS NULL;`,
+    `SELECT COUNT(*)::int AS n FROM bot_decisions WHERE symbol=$1 AND evaluated_at IS NULL;`,
     [sym]
   );
 
   const evaluatedQ = await p.query(
-    `SELECT COUNT(*)::int AS n
-     FROM bot_decisions
-     WHERE symbol=$1 AND evaluated_at IS NOT NULL;`,
+    `SELECT COUNT(*)::int AS n FROM bot_decisions WHERE symbol=$1 AND evaluated_at IS NOT NULL;`,
     [sym]
   );
 
@@ -263,7 +250,7 @@ export async function getLearningSummary({ symbol, limit = 200 }) {
   };
 }
 
-/* ------------------ DEBUG HELPERS ------------------ */
+/* ---------------- DEBUG HELPERS ---------------- */
 
 export async function dbListTables() {
   const p = getPool();
