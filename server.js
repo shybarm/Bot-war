@@ -7,11 +7,8 @@ import { fileURLToPath } from "url";
 import {
   initDb,
   hasDb,
-  insertLearningEvent,
-  getStrategyAccuracy,
   logBotDecision,
-  getDueDecisions,
-  markDecisionEvaluated,
+  getStrategyAccuracy,
   getLearningSummary,
   dbListTables,
   dbDecisionCounts,
@@ -22,9 +19,7 @@ dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT) || 8080;
-
-// ✅ bump version so you can confirm Railway redeployed
-const APP_VERSION = "learning-debug-v2";
+const APP_VERSION = "learning-debug-v3";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -79,47 +74,6 @@ async function newsFor(symbol) {
   }));
 }
 
-/* ---------------- Learning evaluation ---------------- */
-
-async function evaluateDueDecisions(limit = 20) {
-  if (!hasDb()) return { evaluated: 0, stored: 0, reason: "no_db" };
-
-  let due = [];
-  try {
-    due = await getDueDecisions(limit);
-  } catch (e) {
-    console.error("DB getDueDecisions failed:", e.message);
-    return { evaluated: 0, stored: 0, reason: "db_unavailable" };
-  }
-
-  let evaluated = 0;
-  let stored = 0;
-
-  for (const d of due) {
-    try {
-      const q = await finnhubQuote(d.symbol);
-      const updated = await markDecisionEvaluated({ id: d.id, priceAfter: q.price });
-      evaluated += 1;
-
-      if (updated && typeof updated.price_after === "number") {
-        await insertLearningEvent({
-          symbol: updated.symbol,
-          strategy: updated.strategy,
-          horizon: updated.horizon,
-          signal: updated.signal,
-          priceAtSignal: updated.price_at_signal,
-          priceAfter: updated.price_after
-        });
-        stored += 1;
-      }
-    } catch (e) {
-      console.error("evaluate decision failed:", e.message);
-    }
-  }
-
-  return { evaluated, stored };
-}
-
 /* ---------------- Bots logic ---------------- */
 
 function computeFeatures(quote, news) {
@@ -147,35 +101,25 @@ function botSignal(strategy, features) {
   return { signal: "HOLD", horizon: "short", rationale: "Noise range" };
 }
 
-function horizonToEvalAfterSec(horizon) {
-  if (horizon === "short") return 4 * 60 * 60;
-  if (horizon === "medium") return 3 * 24 * 60 * 60;
+function horizonToEvalAfterSec(h) {
+  if (h === "short") return 4 * 60 * 60;
+  if (h === "medium") return 3 * 24 * 60 * 60;
   return 14 * 24 * 60 * 60;
 }
 
 async function scoreBots(symbol, bots) {
   const scored = [];
-
   for (const b of bots) {
     let stats = { samples: 0, accuracy: 0 };
     try {
       stats = await getStrategyAccuracy({ symbol, strategy: b.strategy, horizon: b.horizon, limit: 50 });
-    } catch (e) {
-      console.error("getStrategyAccuracy failed:", e.message);
+    } catch {
       stats = { samples: 0, accuracy: 0 };
     }
-
     const historical = stats.samples ? stats.accuracy : 50;
     const confidence = Math.round(0.6 * b.baseConfidence + 0.4 * historical);
-
-    scored.push({
-      ...b,
-      historicalAccuracy: historical,
-      samples: stats.samples,
-      confidence
-    });
+    scored.push({ ...b, historicalAccuracy: historical, samples: stats.samples, confidence });
   }
-
   scored.sort((a, b) => b.confidence - a.confidence);
   return { bots: scored, winner: scored[0]?.strategy || null };
 }
@@ -194,7 +138,6 @@ app.get("/api/health", (req, res) => {
     apis: {
       finnhub: !!process.env.FINNHUB_API_KEY,
       newsApi: !!process.env.NEWS_API_KEY,
-      openai: !!process.env.OPENAI_API_KEY,
       postgres: hasDb()
     }
   });
@@ -202,8 +145,6 @@ app.get("/api/health", (req, res) => {
 
 app.get("/api/bots/:symbol", async (req, res) => {
   try {
-    await evaluateDueDecisions(10);
-
     const symbol = req.params.symbol.toUpperCase();
     const [quote, news] = await Promise.all([finnhubQuote(symbol), newsFor(symbol)]);
     const features = computeFeatures(quote, news);
@@ -240,12 +181,10 @@ app.get("/api/bots/:symbol", async (req, res) => {
         logged = botsRaw.length;
       } catch (e) {
         logError = e.message;
-        console.error("logBotDecision failed:", e.message);
       }
     }
 
     const scored = await scoreBots(symbol, botsRaw);
-
     res.json({ symbol, logged, logError, features, ...scored });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -291,12 +230,10 @@ app.get("/api/db/recent-decisions/:symbol", async (req, res) => {
   }
 });
 
-// ✅ Insert test: if this works, bot logging will work
+// Insert test
 app.get("/api/db/insert-test/:symbol", async (req, res) => {
   try {
     const symbol = req.params.symbol.toUpperCase();
-    if (!hasDb()) return res.status(400).json({ error: "DATABASE_URL missing" });
-
     const row = await logBotDecision({
       symbol,
       strategy: "test_strategy",
@@ -305,20 +242,9 @@ app.get("/api/db/insert-test/:symbol", async (req, res) => {
       priceAtSignal: 123.45,
       evalAfterSec: 60
     });
-
     res.json({ ok: true, inserted: row });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.post("/api/evaluate", async (req, res) => {
-  try {
-    const limit = Number(req.body?.limit) || 20;
-    const result = await evaluateDueDecisions(Math.min(50, Math.max(1, limit)));
-    res.json({ success: true, ...result });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
   }
 });
 
