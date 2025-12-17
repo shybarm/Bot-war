@@ -31,7 +31,6 @@ export async function initDb() {
 
   await p.query("SELECT 1;");
 
-  // Evaluated outcomes used for scoring accuracy
   await p.query(`
     CREATE TABLE IF NOT EXISTS learning_events (
       id BIGSERIAL PRIMARY KEY,
@@ -51,7 +50,6 @@ export async function initDb() {
     ON learning_events(symbol, strategy, horizon, created_at DESC);
   `);
 
-  // Raw bot decisions waiting to be evaluated later
   await p.query(`
     CREATE TABLE IF NOT EXISTS bot_decisions (
       id BIGSERIAL PRIMARY KEY,
@@ -263,4 +261,58 @@ export async function getLearningSummary({ symbol, limit = 200 }) {
     samplesByStrategy,
     accuracyByStrategy
   };
+}
+
+/* ------------------ DEBUG HELPERS ------------------ */
+
+export async function dbListTables() {
+  const p = getPool();
+  if (!p) return { hasDb: false, tables: [] };
+
+  const r = await p.query(`
+    SELECT tablename
+    FROM pg_tables
+    WHERE schemaname = 'public'
+    ORDER BY tablename;
+  `);
+
+  return { hasDb: true, tables: r.rows.map(x => x.tablename) };
+}
+
+export async function dbDecisionCounts(symbol) {
+  const p = getPool();
+  if (!p) return { hasDb: false, symbol, total: 0, pending: 0, evaluated: 0 };
+
+  const sym = symbol.toUpperCase();
+
+  const totalQ = await p.query(`SELECT COUNT(*)::int AS n FROM bot_decisions WHERE symbol=$1;`, [sym]);
+  const pendingQ = await p.query(`SELECT COUNT(*)::int AS n FROM bot_decisions WHERE symbol=$1 AND evaluated_at IS NULL;`, [sym]);
+  const evaluatedQ = await p.query(`SELECT COUNT(*)::int AS n FROM bot_decisions WHERE symbol=$1 AND evaluated_at IS NOT NULL;`, [sym]);
+
+  return {
+    hasDb: true,
+    symbol: sym,
+    total: totalQ.rows[0]?.n || 0,
+    pending: pendingQ.rows[0]?.n || 0,
+    evaluated: evaluatedQ.rows[0]?.n || 0
+  };
+}
+
+export async function dbRecentDecisions(symbol, limit = 10) {
+  const p = getPool();
+  if (!p) return { hasDb: false, symbol, rows: [] };
+
+  const sym = symbol.toUpperCase();
+  const r = await p.query(
+    `
+    SELECT id, created_at, symbol, strategy, horizon, signal, price_at_signal, due_at, evaluated_at
+    FROM bot_decisions
+    WHERE symbol=$1
+    ORDER BY created_at DESC
+    LIMIT $2;
+    `,
+    [sym, limit]
+  );
+
+  return { hasDb: true, symbol: sym, rows: r.rows };
 }
