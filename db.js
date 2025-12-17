@@ -132,13 +132,13 @@ export async function logBotDecision({ symbol, strategy, horizon, signal, priceA
   const p = getPool();
   if (!p) return null;
 
-  // ✅ FIX: stable interval math (no type inference issues)
+  // ✅ HARD FIX: force $6 to be INT everywhere
   const r = await p.query(
     `
     INSERT INTO bot_decisions
       (symbol, strategy, horizon, signal, price_at_signal, eval_after_sec, due_at)
     VALUES
-      ($1,$2,$3,$4,$5,$6, NOW() + ($6 * INTERVAL '1 second'))
+      ($1,$2,$3,$4,$5, $6::int, NOW() + (($6::int) * INTERVAL '1 second'))
     RETURNING *;
     `,
     [symbol, strategy, horizon, signal, priceAtSignal, evalAfterSec]
@@ -250,8 +250,6 @@ export async function getLearningSummary({ symbol, limit = 200 }) {
     accuracyByStrategy
   };
 }
-
-/* ---------------- DEBUG HELPERS ---------------- */
 
 export async function dbListTables() {
   const p = getPool();
