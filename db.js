@@ -122,7 +122,16 @@ export async function initDb() {
     );
   `);
 
-  // Cached symbol universe (ALL stocks open)
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_bot_trades_created
+    ON bot_trades(created_at DESC);
+  `);
+
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_bot_trades_strategy_created
+    ON bot_trades(strategy, created_at DESC);
+  `);
+
   await p.query(`
     CREATE TABLE IF NOT EXISTS symbol_universe (
       symbol TEXT PRIMARY KEY,
@@ -171,7 +180,7 @@ export async function setSetting(key, value) {
   return r.rows[0];
 }
 
-/* ---------------- Advisory Lock (avoid double runner) ---------------- */
+/* ---------------- Advisory Lock ---------------- */
 
 export async function tryAdvisoryLock(lockId) {
   const p = getPool();
@@ -391,7 +400,7 @@ export async function getBotPositions(strategy) {
   if (!p) return [];
 
   const r = await p.query(
-    `SELECT symbol, qty, avg_price
+    `SELECT symbol, qty, avg_price, updated_at
      FROM bot_positions
      WHERE strategy=$1
      ORDER BY symbol;`,
@@ -463,13 +472,45 @@ export async function recordTrade({ strategy, symbol, side, qty, price, note = n
   return { ok: true };
 }
 
+export async function getRecentTrades({ limit = 50 }) {
+  const p = getPool();
+  if (!p) return [];
+
+  const r = await p.query(
+    `
+    SELECT id, created_at, strategy, symbol, side, qty, price, notional, note
+    FROM bot_trades
+    ORDER BY created_at DESC
+    LIMIT $1;
+    `,
+    [limit]
+  );
+  return r.rows;
+}
+
+export async function getStrategyTrades({ strategy, limit = 50 }) {
+  const p = getPool();
+  if (!p) return [];
+
+  const r = await p.query(
+    `
+    SELECT id, created_at, strategy, symbol, side, qty, price, notional, note
+    FROM bot_trades
+    WHERE strategy=$1
+    ORDER BY created_at DESC
+    LIMIT $2;
+    `,
+    [strategy, limit]
+  );
+  return r.rows;
+}
+
 /* ---------------- Universe Cache ---------------- */
 
 export async function upsertUniverseSymbols(exchange, symbols) {
   const p = getPool();
   if (!p) return { ok: false, error: "no_db" };
 
-  // chunked upserts
   const chunkSize = 500;
   let upserted = 0;
 
@@ -545,7 +586,7 @@ export async function universeSample({ exchange = null, limit = 50 }) {
   return r.rows;
 }
 
-/* ---------------- Debug helpers ---------------- */
+/* ---------------- Debug ---------------- */
 
 export async function dbListTables() {
   const p = getPool();
