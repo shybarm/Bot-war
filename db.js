@@ -25,13 +25,12 @@ function getPool() {
 export async function initDb() {
   const p = getPool();
   if (!p) {
-    console.log("⚠️ DATABASE_URL not set — running WITHOUT DB (still works)");
+    console.log("⚠️ DATABASE_URL not set — running WITHOUT DB");
     return;
   }
 
   await p.query("SELECT 1;");
 
-  // Settings (learning speed, etc.)
   await p.query(`
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
@@ -40,7 +39,6 @@ export async function initDb() {
     );
   `);
 
-  // Learning
   await p.query(`
     CREATE TABLE IF NOT EXISTS learning_events (
       id BIGSERIAL PRIMARY KEY,
@@ -60,7 +58,6 @@ export async function initDb() {
     ON learning_events(symbol, strategy, horizon, created_at DESC);
   `);
 
-  // Decisions (for delayed evaluation)
   await p.query(`
     CREATE TABLE IF NOT EXISTS bot_decisions (
       id BIGSERIAL PRIMARY KEY,
@@ -89,7 +86,6 @@ export async function initDb() {
     WHERE evaluated_at IS NULL;
   `);
 
-  // Bot accounts + trades (the “fight” / bankroll)
   await p.query(`
     CREATE TABLE IF NOT EXISTS bot_accounts (
       strategy TEXT PRIMARY KEY,
@@ -118,14 +114,33 @@ export async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       strategy TEXT NOT NULL,
       symbol TEXT NOT NULL,
-      side TEXT NOT NULL,            -- BUY / SELL
+      side TEXT NOT NULL,
       qty DOUBLE PRECISION NOT NULL,
       price DOUBLE PRECISION NOT NULL,
-      notional DOUBLE PRECISION NOT NULL
+      notional DOUBLE PRECISION NOT NULL,
+      note TEXT
     );
   `);
 
-  console.log("✅ DB ready (tables: app_settings, learning_events, bot_decisions, bot_accounts, bot_positions, bot_trades)");
+  // Cached symbol universe (ALL stocks open)
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS symbol_universe (
+      symbol TEXT PRIMARY KEY,
+      description TEXT,
+      type TEXT,
+      currency TEXT,
+      mic TEXT,
+      exchange TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_symbol_universe_exchange
+    ON symbol_universe(exchange);
+  `);
+
+  console.log("✅ DB ready");
 }
 
 /* ---------------- Settings ---------------- */
@@ -154,6 +169,16 @@ export async function setSetting(key, value) {
   );
 
   return r.rows[0];
+}
+
+/* ---------------- Advisory Lock (avoid double runner) ---------------- */
+
+export async function tryAdvisoryLock(lockId) {
+  const p = getPool();
+  if (!p) return { hasDb: false, locked: false };
+
+  const r = await p.query(`SELECT pg_try_advisory_lock($1) AS locked;`, [lockId]);
+  return { hasDb: true, locked: !!r.rows[0]?.locked };
 }
 
 /* ---------------- Learning ---------------- */
@@ -211,7 +236,6 @@ export async function logBotDecision({ symbol, strategy, horizon, signal, priceA
   const p = getPool();
   if (!p) return null;
 
-  // ✅ Force int casting so Postgres never complains again
   const r = await p.query(
     `
     INSERT INTO bot_decisions
@@ -330,7 +354,7 @@ export async function getLearningSummary({ symbol, limit = 200 }) {
   };
 }
 
-/* ---------------- Bot Accounts (Fight) ---------------- */
+/* ---------------- Bot Accounts / Trades ---------------- */
 
 export async function ensureBotAccounts({ startingCash = 100000, targetCash = 150000 }) {
   const p = getPool();
@@ -376,30 +400,25 @@ export async function getBotPositions(strategy) {
   return r.rows;
 }
 
-export async function recordTrade({ strategy, symbol, side, qty, price }) {
+export async function recordTrade({ strategy, symbol, side, qty, price, note = null }) {
   const p = getPool();
   if (!p) return null;
 
   const notional = qty * price;
 
-  // Insert trade log
   await p.query(
-    `INSERT INTO bot_trades (strategy, symbol, side, qty, price, notional)
-     VALUES ($1,$2,$3,$4,$5,$6);`,
-    [strategy, symbol, side, qty, price, notional]
+    `INSERT INTO bot_trades (strategy, symbol, side, qty, price, notional, note)
+     VALUES ($1,$2,$3,$4,$5,$6,$7);`,
+    [strategy, symbol, side, qty, price, notional, note]
   );
 
-  // Update account + positions
   if (side === "BUY") {
-    // cash -= notional
     await p.query(
       `UPDATE bot_accounts SET cash = cash - $2, updated_at=NOW()
        WHERE strategy=$1;`,
       [strategy, notional]
     );
 
-    // upsert position
-    // new avg price = weighted
     await p.query(
       `
       INSERT INTO bot_positions (strategy, symbol, qty, avg_price)
@@ -415,14 +434,12 @@ export async function recordTrade({ strategy, symbol, side, qty, price }) {
   }
 
   if (side === "SELL") {
-    // cash += notional
     await p.query(
       `UPDATE bot_accounts SET cash = cash + $2, updated_at=NOW()
        WHERE strategy=$1;`,
       [strategy, notional]
     );
 
-    // reduce/remove position
     const pos = await p.query(
       `SELECT qty FROM bot_positions WHERE strategy=$1 AND symbol=$2;`,
       [strategy, symbol]
@@ -446,7 +463,89 @@ export async function recordTrade({ strategy, symbol, side, qty, price }) {
   return { ok: true };
 }
 
-/* ---------------- Debug ---------------- */
+/* ---------------- Universe Cache ---------------- */
+
+export async function upsertUniverseSymbols(exchange, symbols) {
+  const p = getPool();
+  if (!p) return { ok: false, error: "no_db" };
+
+  // chunked upserts
+  const chunkSize = 500;
+  let upserted = 0;
+
+  for (let i = 0; i < symbols.length; i += chunkSize) {
+    const chunk = symbols.slice(i, i + chunkSize);
+    const values = [];
+    const params = [];
+
+    let idx = 1;
+    for (const s of chunk) {
+      params.push(s.symbol, s.description || null, s.type || null, s.currency || null, s.mic || null, exchange);
+      values.push(`($${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++}, NOW())`);
+    }
+
+    await p.query(
+      `
+      INSERT INTO symbol_universe (symbol, description, type, currency, mic, exchange, updated_at)
+      VALUES ${values.join(",")}
+      ON CONFLICT (symbol) DO UPDATE
+      SET
+        description = EXCLUDED.description,
+        type = EXCLUDED.type,
+        currency = EXCLUDED.currency,
+        mic = EXCLUDED.mic,
+        exchange = EXCLUDED.exchange,
+        updated_at = NOW();
+      `,
+      params
+    );
+
+    upserted += chunk.length;
+  }
+
+  return { ok: true, upserted };
+}
+
+export async function universeCount(exchange = null) {
+  const p = getPool();
+  if (!p) return { hasDb: false, count: 0 };
+
+  if (!exchange) {
+    const r = await p.query(`SELECT COUNT(*)::int AS n FROM symbol_universe;`);
+    return { hasDb: true, count: r.rows[0]?.n || 0 };
+  }
+
+  const r = await p.query(`SELECT COUNT(*)::int AS n FROM symbol_universe WHERE exchange=$1;`, [exchange]);
+  return { hasDb: true, count: r.rows[0]?.n || 0 };
+}
+
+export async function universeSample({ exchange = null, limit = 50 }) {
+  const p = getPool();
+  if (!p) return [];
+
+  if (exchange) {
+    const r = await p.query(
+      `SELECT symbol, description, type
+       FROM symbol_universe
+       WHERE exchange=$1
+       ORDER BY random()
+       LIMIT $2;`,
+      [exchange, limit]
+    );
+    return r.rows;
+  }
+
+  const r = await p.query(
+    `SELECT symbol, description, type
+     FROM symbol_universe
+     ORDER BY random()
+     LIMIT $1;`,
+    [limit]
+  );
+  return r.rows;
+}
+
+/* ---------------- Debug helpers ---------------- */
 
 export async function dbListTables() {
   const p = getPool();
