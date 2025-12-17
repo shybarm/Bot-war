@@ -31,6 +31,16 @@ export async function initDb() {
 
   await p.query("SELECT 1;");
 
+  // Settings (learning speed, etc.)
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // Learning
   await p.query(`
     CREATE TABLE IF NOT EXISTS learning_events (
       id BIGSERIAL PRIMARY KEY,
@@ -50,6 +60,7 @@ export async function initDb() {
     ON learning_events(symbol, strategy, horizon, created_at DESC);
   `);
 
+  // Decisions (for delayed evaluation)
   await p.query(`
     CREATE TABLE IF NOT EXISTS bot_decisions (
       id BIGSERIAL PRIMARY KEY,
@@ -78,8 +89,74 @@ export async function initDb() {
     WHERE evaluated_at IS NULL;
   `);
 
-  console.log("✅ DB ready (tables: learning_events, bot_decisions)");
+  // Bot accounts + trades (the “fight” / bankroll)
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS bot_accounts (
+      strategy TEXT PRIMARY KEY,
+      cash DOUBLE PRECISION NOT NULL,
+      starting_cash DOUBLE PRECISION NOT NULL,
+      target_cash DOUBLE PRECISION NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS bot_positions (
+      strategy TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      qty DOUBLE PRECISION NOT NULL,
+      avg_price DOUBLE PRECISION NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (strategy, symbol)
+    );
+  `);
+
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS bot_trades (
+      id BIGSERIAL PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      strategy TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL,            -- BUY / SELL
+      qty DOUBLE PRECISION NOT NULL,
+      price DOUBLE PRECISION NOT NULL,
+      notional DOUBLE PRECISION NOT NULL
+    );
+  `);
+
+  console.log("✅ DB ready (tables: app_settings, learning_events, bot_decisions, bot_accounts, bot_positions, bot_trades)");
 }
+
+/* ---------------- Settings ---------------- */
+
+export async function getSetting(key, fallback = null) {
+  const p = getPool();
+  if (!p) return fallback;
+
+  const r = await p.query(`SELECT value FROM app_settings WHERE key=$1`, [key]);
+  return r.rows[0]?.value ?? fallback;
+}
+
+export async function setSetting(key, value) {
+  const p = getPool();
+  if (!p) return null;
+
+  const r = await p.query(
+    `
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES ($1,$2,NOW())
+    ON CONFLICT (key)
+    DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()
+    RETURNING key, value, updated_at;
+    `,
+    [key, String(value)]
+  );
+
+  return r.rows[0];
+}
+
+/* ---------------- Learning ---------------- */
 
 export async function insertLearningEvent({ symbol, strategy, horizon, signal, priceAtSignal, priceAfter }) {
   const p = getPool();
@@ -128,11 +205,13 @@ export async function getStrategyAccuracy({ symbol, strategy, horizon, limit = 5
   return { samples: rows.length, accuracy: Number(((correct / rows.length) * 100).toFixed(1)) };
 }
 
+/* ---------------- Decisions ---------------- */
+
 export async function logBotDecision({ symbol, strategy, horizon, signal, priceAtSignal, evalAfterSec }) {
   const p = getPool();
   if (!p) return null;
 
-  // ✅ HARD FIX: force $6 to be INT everywhere
+  // ✅ Force int casting so Postgres never complains again
   const r = await p.query(
     `
     INSERT INTO bot_decisions
@@ -250,6 +329,124 @@ export async function getLearningSummary({ symbol, limit = 200 }) {
     accuracyByStrategy
   };
 }
+
+/* ---------------- Bot Accounts (Fight) ---------------- */
+
+export async function ensureBotAccounts({ startingCash = 100000, targetCash = 150000 }) {
+  const p = getPool();
+  if (!p) return null;
+
+  const strategies = ["sp500_long", "market_swing", "day_trade"];
+  for (const s of strategies) {
+    await p.query(
+      `
+      INSERT INTO bot_accounts (strategy, cash, starting_cash, target_cash)
+      VALUES ($1,$2,$2,$3)
+      ON CONFLICT (strategy) DO NOTHING;
+      `,
+      [s, startingCash, targetCash]
+    );
+  }
+  return true;
+}
+
+export async function getBotAccounts() {
+  const p = getPool();
+  if (!p) return [];
+
+  const r = await p.query(
+    `SELECT strategy, cash, starting_cash, target_cash, updated_at
+     FROM bot_accounts
+     ORDER BY strategy;`
+  );
+  return r.rows;
+}
+
+export async function getBotPositions(strategy) {
+  const p = getPool();
+  if (!p) return [];
+
+  const r = await p.query(
+    `SELECT symbol, qty, avg_price
+     FROM bot_positions
+     WHERE strategy=$1
+     ORDER BY symbol;`,
+    [strategy]
+  );
+  return r.rows;
+}
+
+export async function recordTrade({ strategy, symbol, side, qty, price }) {
+  const p = getPool();
+  if (!p) return null;
+
+  const notional = qty * price;
+
+  // Insert trade log
+  await p.query(
+    `INSERT INTO bot_trades (strategy, symbol, side, qty, price, notional)
+     VALUES ($1,$2,$3,$4,$5,$6);`,
+    [strategy, symbol, side, qty, price, notional]
+  );
+
+  // Update account + positions
+  if (side === "BUY") {
+    // cash -= notional
+    await p.query(
+      `UPDATE bot_accounts SET cash = cash - $2, updated_at=NOW()
+       WHERE strategy=$1;`,
+      [strategy, notional]
+    );
+
+    // upsert position
+    // new avg price = weighted
+    await p.query(
+      `
+      INSERT INTO bot_positions (strategy, symbol, qty, avg_price)
+      VALUES ($1,$2,$3,$4)
+      ON CONFLICT (strategy, symbol) DO UPDATE
+      SET
+        avg_price = ((bot_positions.qty * bot_positions.avg_price) + (EXCLUDED.qty * EXCLUDED.avg_price)) / (bot_positions.qty + EXCLUDED.qty),
+        qty = bot_positions.qty + EXCLUDED.qty,
+        updated_at = NOW();
+      `,
+      [strategy, symbol, qty, price]
+    );
+  }
+
+  if (side === "SELL") {
+    // cash += notional
+    await p.query(
+      `UPDATE bot_accounts SET cash = cash + $2, updated_at=NOW()
+       WHERE strategy=$1;`,
+      [strategy, notional]
+    );
+
+    // reduce/remove position
+    const pos = await p.query(
+      `SELECT qty FROM bot_positions WHERE strategy=$1 AND symbol=$2;`,
+      [strategy, symbol]
+    );
+    const currentQty = pos.rows[0]?.qty ?? 0;
+    const newQty = currentQty - qty;
+
+    if (newQty <= 0.0000001) {
+      await p.query(
+        `DELETE FROM bot_positions WHERE strategy=$1 AND symbol=$2;`,
+        [strategy, symbol]
+      );
+    } else {
+      await p.query(
+        `UPDATE bot_positions SET qty=$3, updated_at=NOW() WHERE strategy=$1 AND symbol=$2;`,
+        [strategy, symbol, newQty]
+      );
+    }
+  }
+
+  return { ok: true };
+}
+
+/* ---------------- Debug ---------------- */
 
 export async function dbListTables() {
   const p = getPool();
