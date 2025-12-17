@@ -22,6 +22,14 @@ function getPool() {
   return pool;
 }
 
+/**
+ * Safe migration helper: add a column if missing.
+ * Works even if the table exists already.
+ */
+async function addColumnIfMissing(p, table, col, typeSql) {
+  await p.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${typeSql};`);
+}
+
 export async function initDb() {
   const p = getPool();
   if (!p) {
@@ -117,10 +125,13 @@ export async function initDb() {
       side TEXT NOT NULL,
       qty DOUBLE PRECISION NOT NULL,
       price DOUBLE PRECISION NOT NULL,
-      notional DOUBLE PRECISION NOT NULL,
-      note TEXT
+      notional DOUBLE PRECISION NOT NULL
+      -- note column may be added later by migration
     );
   `);
+
+  // ✅ SAFE MIGRATION: ensure note exists (fix your current error)
+  await addColumnIfMissing(p, "bot_trades", "note", "TEXT");
 
   await p.query(`
     CREATE INDEX IF NOT EXISTS idx_bot_trades_created
@@ -149,7 +160,7 @@ export async function initDb() {
     ON symbol_universe(exchange);
   `);
 
-  console.log("✅ DB ready");
+  console.log("✅ DB ready (with migrations)");
 }
 
 /* ---------------- Settings ---------------- */
@@ -505,7 +516,7 @@ export async function getStrategyTrades({ strategy, limit = 50 }) {
   return r.rows;
 }
 
-/* ---------------- Universe Cache ---------------- */
+/* ---------------- Universe Cache (used later) ---------------- */
 
 export async function upsertUniverseSymbols(exchange, symbols) {
   const p = getPool();
