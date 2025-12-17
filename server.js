@@ -13,6 +13,7 @@ import {
   logBotDecision,
   getDueDecisions,
   markDecisionEvaluated,
+  getLearningSummary,
 } from "./db.js";
 
 dotenv.config();
@@ -29,7 +30,7 @@ app.use(express.static(path.join(__dirname, "public")));
 
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
-// -------- External data --------
+// ------------------ External data ------------------
 
 async function finnhubQuote(symbol) {
   if (!process.env.FINNHUB_API_KEY) throw new Error("FINNHUB_API_KEY missing");
@@ -50,6 +51,8 @@ function sentimentScore(text) {
   return Math.max(-1, Math.min(1, s));
 }
 
+// Default: NewsAPI. (You said you changed provider; keep this working by using your provider’s key here.)
+// If you now use Finnhub news, swap this implementation later — but keep it as-is if it works for you.
 async function newsFor(symbol) {
   if (!process.env.NEWS_API_KEY) throw new Error("NEWS_API_KEY missing");
 
@@ -73,7 +76,7 @@ async function newsFor(symbol) {
   }));
 }
 
-// -------- OpenAI analysis --------
+// ------------------ OpenAI analysis ------------------
 
 async function openaiAnalyze({ symbol, quote, news }) {
   if (!process.env.OPENAI_API_KEY) {
@@ -108,7 +111,7 @@ Return VALID JSON ONLY:
  "stopLoss":number,
  "timeHorizon":"short|medium|long"
 }
-`.trim();
+`.\db?.trim?.() || prompt.trim(); // harmless safeguard
 
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -122,7 +125,7 @@ Return VALID JSON ONLY:
       max_tokens: 350,
       messages: [
         { role: "system", content: "You are a cautious market analyst. Output JSON only." },
-        { role: "user", content: prompt }
+        { role: "user", content: prompt.trim() }
       ]
     })
   });
@@ -144,23 +147,27 @@ Return VALID JSON ONLY:
   }
 }
 
-// -------- Learning evaluation --------
+// ------------------ Learning evaluation ------------------
 
 async function evaluateDueDecisions(limit = 20) {
-  if (!hasDb()) return { evaluated: 0, stored: 0, skipped: 0, reason: "no_db" };
+  if (!hasDb()) return { evaluated: 0, stored: 0, reason: "no_db" };
 
-  const due = await getDueDecisions(limit);
+  let due = [];
+  try {
+    due = await getDueDecisions(limit);
+  } catch {
+    return { evaluated: 0, stored: 0, reason: "db_unavailable" };
+  }
+
   let evaluated = 0;
   let stored = 0;
 
   for (const d of due) {
     try {
-      // fetch latest price now
       const q = await finnhubQuote(d.symbol);
       const updated = await markDecisionEvaluated({ id: d.id, priceAfter: q.price });
       evaluated += 1;
 
-      // write evaluated outcome into learning_events (used by bot accuracy)
       if (updated && typeof updated.price_after === "number") {
         await insertLearningEvent({
           symbol: updated.symbol,
@@ -173,25 +180,18 @@ async function evaluateDueDecisions(limit = 20) {
         stored += 1;
       }
     } catch {
-      // if price fetch fails, keep it pending; do not crash
+      // Leave decision pending if price fetch fails; do not crash the app
     }
   }
 
-  return { evaluated, stored, skipped: 0 };
+  return { evaluated, stored };
 }
 
-// -------- Bots logic --------
+// ------------------ Bots logic ------------------
 
 function computeFeatures(quote, news) {
   const avgSent = news.length ? (news.reduce((a, n) => a + (n.sentiment || 0), 0) / news.length) : 0;
   return { avgSent, changePercent: quote.changePercent || 0 };
-}
-
-function strategyLabel(strategy) {
-  if (strategy === "sp500_long") return "sp500_long";
-  if (strategy === "market_swing") return "market_swing";
-  if (strategy === "day_trade") return "day_trade";
-  return strategy;
 }
 
 function botSignal(strategy, features) {
@@ -216,17 +216,22 @@ function botSignal(strategy, features) {
 }
 
 function horizonToEvalAfterSec(horizon) {
-  // MVP evaluation windows (adjust later)
-  if (horizon === "short") return 4 * 60 * 60;      // 4 hours
-  if (horizon === "medium") return 3 * 24 * 60 * 60; // 3 days
-  return 14 * 24 * 60 * 60;                          // 14 days
+  if (horizon === "short") return 4 * 60 * 60;        // 4 hours
+  if (horizon === "medium") return 3 * 24 * 60 * 60;  // 3 days
+  return 14 * 24 * 60 * 60;                           // 14 days
 }
 
 async function scoreBots(symbol, bots) {
   const scored = [];
 
   for (const b of bots) {
-    const stats = await getStrategyAccuracy({ symbol, strategy: b.strategy, horizon: b.horizon, limit: 50 });
+    let stats = { samples: 0, accuracy: 0 };
+    try {
+      stats = await getStrategyAccuracy({ symbol, strategy: b.strategy, horizon: b.horizon, limit: 50 });
+    } catch {
+      stats = { samples: 0, accuracy: 0 };
+    }
+
     const historical = stats.samples ? stats.accuracy : 50;
     const confidence = Math.round(0.6 * b.baseConfidence + 0.4 * historical);
 
@@ -242,7 +247,7 @@ async function scoreBots(symbol, bots) {
   return { bots: scored, winner: scored[0]?.strategy || null };
 }
 
-// -------- API --------
+// ------------------ API routes ------------------
 
 app.get("/api/health", (req, res) => {
   res.json({
@@ -282,7 +287,6 @@ app.get("/api/news/:symbol", async (req, res) => {
 
 app.get("/api/analyze/:symbol", async (req, res) => {
   try {
-    // (Optional) evaluate due learning in the background on normal usage
     await evaluateDueDecisions(10);
 
     const symbol = req.params.symbol.toUpperCase();
@@ -297,7 +301,6 @@ app.get("/api/analyze/:symbol", async (req, res) => {
 
 app.get("/api/bots/:symbol", async (req, res) => {
   try {
-    // Evaluate due decisions on each call (keeps learning moving without cron)
     await evaluateDueDecisions(20);
 
     const symbol = req.params.symbol.toUpperCase();
@@ -316,20 +319,26 @@ app.get("/api/bots/:symbol", async (req, res) => {
       };
     });
 
-    // Log decisions (learning input)
+    // Log decisions for learning
+    let logged = 0;
     if (hasDb()) {
-      await Promise.all(
-        botsRaw.map((b) =>
-          logBotDecision({
-            symbol,
-            strategy: strategyLabel(b.strategy),
-            horizon: b.horizon,
-            signal: b.signal,
-            priceAtSignal: quote.price,
-            evalAfterSec: horizonToEvalAfterSec(b.horizon),
-          })
-        )
-      );
+      try {
+        await Promise.all(
+          botsRaw.map((b) =>
+            logBotDecision({
+              symbol,
+              strategy: b.strategy,
+              horizon: b.horizon,
+              signal: b.signal,
+              priceAtSignal: quote.price,
+              evalAfterSec: horizonToEvalAfterSec(b.horizon),
+            })
+          )
+        );
+        logged = botsRaw.length;
+      } catch {
+        logged = 0; // DB temporarily unavailable; keep serving
+      }
     }
 
     const scored = await scoreBots(symbol, botsRaw);
@@ -337,7 +346,7 @@ app.get("/api/bots/:symbol", async (req, res) => {
     res.json({
       symbol,
       features,
-      logged: hasDb() ? botsRaw.length : 0,
+      logged,
       ...scored
     });
   } catch (e) {
@@ -345,7 +354,6 @@ app.get("/api/bots/:symbol", async (req, res) => {
   }
 });
 
-// Manual “run learning now” endpoint
 app.post("/api/evaluate", async (req, res) => {
   try {
     const limit = Number(req.body?.limit) || 20;
@@ -355,6 +363,18 @@ app.post("/api/evaluate", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+app.get("/api/learning/summary/:symbol", async (req, res) => {
+  try {
+    const symbol = req.params.symbol.toUpperCase();
+    const data = await getLearningSummary({ symbol, limit: 200 });
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ------------------ Start ------------------
 
 async function start() {
   try {
