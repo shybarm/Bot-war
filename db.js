@@ -132,13 +132,13 @@ export async function logBotDecision({ symbol, strategy, horizon, signal, priceA
   const p = getPool();
   if (!p) return null;
 
-  // ✅ FIX: use make_interval to avoid typing issues
+  // ✅ FIX: stable interval math (no type inference issues)
   const r = await p.query(
     `
     INSERT INTO bot_decisions
       (symbol, strategy, horizon, signal, price_at_signal, eval_after_sec, due_at)
     VALUES
-      ($1,$2,$3,$4,$5,$6, NOW() + make_interval(secs => $6))
+      ($1,$2,$3,$4,$5,$6, NOW() + ($6 * INTERVAL '1 second'))
     RETURNING *;
     `,
     [symbol, strategy, horizon, signal, priceAtSignal, evalAfterSec]
