@@ -4,12 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Bot-War — AI Trading MVP</title>
-
-  <!-- Tailwind CDN for MVP speed (later: compile for production) -->
   <script src="https://cdn.tailwindcss.com"></script>
-
   <style>
-    /* Small polish beyond Tailwind */
     .glass { background: rgba(255,255,255,.06); backdrop-filter: blur(10px); }
     .border-soft { border-color: rgba(255,255,255,.10); }
     .shadow-soft { box-shadow: 0 18px 40px rgba(0,0,0,.35); }
@@ -23,7 +19,6 @@
 </head>
 
 <body class="min-h-screen bg-slate-950 text-white">
-  <!-- Top gradient -->
   <div class="pointer-events-none fixed inset-0 opacity-60"
        style="background:
         radial-gradient(900px 500px at 20% 10%, rgba(99,102,241,.25), transparent 60%),
@@ -32,7 +27,6 @@
   </div>
 
   <div class="relative mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
-    <!-- Header -->
     <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
       <div>
         <div class="inline-flex items-center gap-2 rounded-full border border-soft glass px-3 py-1 text-xs text-white/70">
@@ -49,7 +43,7 @@
       </div>
 
       <div class="flex items-center gap-3">
-        <a id="healthLink" class="text-sm text-white/70 hover:text-white underline underline-offset-4" href="/api/health" target="_blank" rel="noreferrer">
+        <a class="text-sm text-white/70 hover:text-white underline underline-offset-4" href="/api/health" target="_blank" rel="noreferrer">
           API Health
         </a>
         <button id="refreshBtn"
@@ -59,7 +53,6 @@
       </div>
     </div>
 
-    <!-- Search bar -->
     <div class="mt-8 rounded-2xl border border-soft glass shadow-soft">
       <div class="p-4 sm:p-5">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -76,10 +69,11 @@
               </button>
             </div>
             <div class="mt-2 text-xs text-white/50">
-              Try: <button class="chip" data-s="AAPL">AAPL</button>,
-              <button class="chip" data-s="NVDA">NVDA</button>,
-              <button class="chip" data-s="TSLA">TSLA</button>,
-              <button class="chip" data-s="MSFT">MSFT</button>
+              Try:
+              <button class="chip underline underline-offset-4 text-white/70 hover:text-white" data-s="AAPL">AAPL</button>,
+              <button class="chip underline underline-offset-4 text-white/70 hover:text-white" data-s="NVDA">NVDA</button>,
+              <button class="chip underline underline-offset-4 text-white/70 hover:text-white" data-s="TSLA">TSLA</button>,
+              <button class="chip underline underline-offset-4 text-white/70 hover:text-white" data-s="MSFT">MSFT</button>
             </div>
           </div>
 
@@ -93,7 +87,6 @@
       </div>
     </div>
 
-    <!-- Hero: Snapshot -->
     <div class="mt-6 grid gap-6 lg:grid-cols-3">
       <div class="lg:col-span-2 rounded-2xl border border-soft glass shadow-soft">
         <div class="p-5 sm:p-6">
@@ -140,7 +133,6 @@
         </div>
       </div>
 
-      <!-- Bots Fight Hero Card -->
       <div class="rounded-2xl border border-soft glass shadow-soft">
         <div class="p-5 sm:p-6">
           <div class="flex items-center justify-between">
@@ -154,7 +146,6 @@
           </div>
 
           <div id="botsWrap" class="mt-5 space-y-3">
-            <!-- bot cards injected -->
             <div class="rounded-xl border border-soft bg-white/5 p-4">
               <div class="h-3 w-2/3 skeleton rounded"></div>
               <div class="mt-3 h-3 w-1/2 skeleton rounded"></div>
@@ -162,14 +153,13 @@
             </div>
           </div>
 
-          <p id="botsNote" class="mt-4 text-xs text-white/50">
+          <p class="mt-4 text-xs text-white/50">
             Confidence blends current signal strength and historical accuracy (if learned data exists).
           </p>
         </div>
       </div>
     </div>
 
-    <!-- News -->
     <div class="mt-6 rounded-2xl border border-soft glass shadow-soft">
       <div class="p-5 sm:p-6">
         <div class="flex items-center justify-between gap-3">
@@ -182,7 +172,6 @@
         </div>
 
         <div id="newsList" class="mt-5 grid gap-3 sm:grid-cols-2">
-          <!-- news cards injected -->
           <div class="rounded-xl border border-soft bg-white/5 p-4">
             <div class="h-3 w-3/4 skeleton rounded"></div>
             <div class="mt-3 h-3 w-1/2 skeleton rounded"></div>
@@ -197,7 +186,57 @@
       </div>
     </div>
 
-    <!-- Market Overview -->
+    <!-- Learning Dashboard -->
+    <div class="mt-6 rounded-2xl border border-soft glass shadow-soft">
+      <div class="p-5 sm:p-6">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <p class="text-xs text-white/50">Learning</p>
+            <h2 class="mt-1 text-xl font-semibold tracking-tight">Performance memory</h2>
+            <p class="mt-1 text-sm text-white/60">Tracks pending evaluations and strategy accuracy.</p>
+          </div>
+          <button id="runLearningBtn"
+            class="rounded-xl bg-emerald-500/20 border border-emerald-400/25 px-4 py-2 text-sm text-emerald-100 hover:bg-emerald-500/30 transition">
+            Run learning now
+          </button>
+        </div>
+
+        <div class="mt-5 grid gap-3 sm:grid-cols-3">
+          <div class="rounded-xl border border-soft bg-white/5 p-4">
+            <p class="text-xs text-white/50">Pending decisions</p>
+            <p id="learnPending" class="mt-1 text-2xl font-semibold tabular-nums">—</p>
+          </div>
+          <div class="rounded-xl border border-soft bg-white/5 p-4">
+            <p class="text-xs text-white/50">Evaluated decisions</p>
+            <p id="learnEvaluated" class="mt-1 text-2xl font-semibold tabular-nums">—</p>
+          </div>
+          <div class="rounded-xl border border-soft bg-white/5 p-4">
+            <p class="text-xs text-white/50">DB status</p>
+            <p id="learnDb" class="mt-1 text-2xl font-semibold">—</p>
+          </div>
+        </div>
+
+        <div class="mt-5 overflow-hidden rounded-xl border border-soft">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-white/5 text-white/60">
+              <tr>
+                <th class="px-4 py-3 font-medium">Strategy</th>
+                <th class="px-4 py-3 font-medium">Samples</th>
+                <th class="px-4 py-3 font-medium">Accuracy</th>
+              </tr>
+            </thead>
+            <tbody id="learnTable" class="divide-y divide-white/10">
+              <tr><td class="px-4 py-4 text-white/60" colspan="3">Run analysis to populate.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="mt-3 text-xs text-white/50">
+          Note: outcomes update only after each decision’s evaluation window (Short=4h, Medium=3d, Long=14d).
+        </p>
+      </div>
+    </div>
+
     <div class="mt-6 rounded-2xl border border-soft glass shadow-soft">
       <div class="p-5 sm:p-6">
         <div class="flex items-center justify-between gap-3">
@@ -227,11 +266,6 @@
                 <td class="px-4 py-3"><div class="h-3 w-24 skeleton rounded"></div></td>
                 <td class="px-4 py-3"><div class="h-3 w-20 skeleton rounded"></div></td>
               </tr>
-              <tr>
-                <td class="px-4 py-3"><div class="h-3 w-16 skeleton rounded"></div></td>
-                <td class="px-4 py-3"><div class="h-3 w-24 skeleton rounded"></div></td>
-                <td class="px-4 py-3"><div class="h-3 w-20 skeleton rounded"></div></td>
-              </tr>
             </tbody>
           </table>
         </div>
@@ -243,30 +277,42 @@
     </div>
 
     <div class="mt-8 text-center text-xs text-white/40">
-      MVP UI • Next: learning automation + bots performance curves
+      MVP UI • Option 2 enabled • Next: strategy evolution + performance curves
     </div>
   </div>
 
   <script>
     const API = window.location.origin;
 
-    // Chips
+    document.getElementById("refreshBtn").addEventListener("click", () => location.reload());
+    document.getElementById("reloadMarket").addEventListener("click", loadMarket);
+    document.getElementById("runBtn").addEventListener("click", runAll);
+
+    document.getElementById("sym").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") runAll();
+    });
+
     document.querySelectorAll(".chip").forEach(btn => {
-      btn.className = "chip underline underline-offset-4 text-white/70 hover:text-white";
       btn.addEventListener("click", () => {
         document.getElementById("sym").value = btn.dataset.s;
         runAll();
       });
     });
 
-    // Buttons
-    document.getElementById("runBtn").addEventListener("click", runAll);
-    document.getElementById("refreshBtn").addEventListener("click", () => location.reload());
-    document.getElementById("reloadMarket").addEventListener("click", loadMarket);
-
-    // Enter key runs
-    document.getElementById("sym").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") runAll();
+    document.getElementById("runLearningBtn").addEventListener("click", async () => {
+      try {
+        setStatus("Running learning…", "neutral");
+        await fetchJson(`${API}/api/evaluate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ limit: 30 })
+        });
+        const s = (document.getElementById("sym").value || "AAPL").toUpperCase().trim();
+        await loadLearning(s);
+        setStatus("Learning updated", "ok");
+      } catch (e) {
+        setStatus(`Learning error: ${e.message}`, "bad");
+      }
     });
 
     const fmtMoney = (n) => (typeof n === "number" && isFinite(n)) ? `$${n.toFixed(2)}` : "—";
@@ -325,15 +371,14 @@
 
       const wb = document.getElementById("winnerBadge");
       wb.textContent = winner ? `Winner: ${strategyLabel(winner)}` : "—";
-      wb.className = "inline-flex items-center rounded-full border px-3 py-1 text-xs";
-      wb.classList.add("border-white/10","bg-white/5","text-white/70");
+      wb.className = "inline-flex items-center rounded-full border px-3 py-1 text-xs border-white/10 bg-white/5 text-white/70";
 
       if (!bots.length) {
         wrap.innerHTML = `<div class="text-sm text-white/60">No bot data returned.</div>`;
         return;
       }
 
-      bots.forEach((b, idx) => {
+      bots.forEach((b) => {
         const isWinner = b.strategy === winner;
         const [sigText, sigClass] = signalBadge(b.signal);
 
@@ -342,8 +387,7 @@
         const samples = typeof b.samples === "number" ? b.samples : 0;
 
         const card = document.createElement("div");
-        card.className = "rounded-xl border bg-white/5 p-4 transition";
-        card.classList.add("border-white/10");
+        card.className = "rounded-xl border bg-white/5 p-4 transition border-white/10";
         if (isWinner) card.classList.add("ring-2","ring-indigo-400/40","bg-indigo-500/10");
 
         card.innerHTML = `
@@ -371,6 +415,10 @@
             <span>Historical accuracy</span>
             <span class="tabular-nums">${hist === null ? "—" : `${hist}%`} ${samples ? `(${samples})` : ""}</span>
           </div>
+
+          <div class="mt-2 text-xs text-white/50">
+            Logged this run: ${typeof data.logged === "number" ? data.logged : 0}
+          </div>
         `;
         wrap.appendChild(card);
       });
@@ -382,7 +430,6 @@
       list.innerHTML = "";
 
       const items = (newsArr || []).slice(0, 8);
-
       meta.textContent = items.length ? `${items.length} articles for ${symbol}` : `No articles for ${symbol}`;
 
       if (!items.length) {
@@ -410,7 +457,7 @@
             <div class="shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-xs ${tag[1]}">${tag[0]}</div>
           </div>
           <div class="mt-2 text-xs text-white/60">${n.source || "Unknown"} ${date ? "• " + date : ""}</div>
-          <div class="mt-3 text-sm text-white/70 line-clamp-2">${n.description || ""}</div>
+          <div class="mt-3 text-sm text-white/70">${n.description || ""}</div>
         `;
         list.appendChild(card);
       });
@@ -480,7 +527,7 @@
       try {
         const data = await fetchJson(`${API}/api/market-overview`);
         renderMarket(data);
-      } catch (e) {
+      } catch {
         renderMarket([]);
       }
     }
@@ -488,21 +535,14 @@
     function setLoadingState() {
       setStatus("Running…", "neutral");
 
-      // Bots skeleton
       document.getElementById("botsWrap").innerHTML = `
         <div class="rounded-xl border border-soft bg-white/5 p-4">
           <div class="h-3 w-2/3 skeleton rounded"></div>
           <div class="mt-3 h-3 w-1/2 skeleton rounded"></div>
           <div class="mt-4 h-2 w-full skeleton rounded"></div>
         </div>
-        <div class="rounded-xl border border-soft bg-white/5 p-4">
-          <div class="h-3 w-3/4 skeleton rounded"></div>
-          <div class="mt-3 h-3 w-1/3 skeleton rounded"></div>
-          <div class="mt-4 h-2 w-full skeleton rounded"></div>
-        </div>
       `;
 
-      // News skeleton
       document.getElementById("newsList").innerHTML = `
         <div class="rounded-xl border border-soft bg-white/5 p-4">
           <div class="h-3 w-3/4 skeleton rounded"></div>
@@ -516,6 +556,36 @@
         </div>
       `;
       document.getElementById("newsMeta").textContent = "Loading…";
+    }
+
+    async function loadLearning(symbol) {
+      const data = await fetchJson(`${API}/api/learning/summary/${encodeURIComponent(symbol)}`);
+
+      document.getElementById("learnPending").textContent = data.pending ?? "—";
+      document.getElementById("learnEvaluated").textContent = data.evaluated ?? "—";
+      document.getElementById("learnDb").textContent = data.hasDb ? "Connected" : "Off";
+
+      const tb = document.getElementById("learnTable");
+      tb.innerHTML = "";
+
+      const samples = data.samplesByStrategy || {};
+      const acc = data.accuracyByStrategy || {};
+      const keys = Object.keys(samples);
+
+      if (!keys.length) {
+        tb.innerHTML = `<tr><td class="px-4 py-4 text-white/60" colspan="3">No learning samples yet.</td></tr>`;
+        return;
+      }
+
+      keys.forEach((k) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="px-4 py-3 font-semibold">${k}</td>
+          <td class="px-4 py-3 tabular-nums text-white/80">${samples[k]}</td>
+          <td class="px-4 py-3 tabular-nums text-white/80">${acc[k] ?? 0}%</td>
+        `;
+        tb.appendChild(tr);
+      });
     }
 
     async function runAll() {
@@ -534,6 +604,7 @@
         renderAnalyze(an);
         renderBots(bots);
         renderNews(s, news?.news || []);
+        await loadLearning(s);
 
         setStatus("Done", "ok");
       } catch (e) {
@@ -541,7 +612,6 @@
       }
     }
 
-    // Boot
     loadMarket();
   </script>
 </body>
