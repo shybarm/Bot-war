@@ -8,7 +8,6 @@
     :root{
       --bg:#0b1020;
       --card:#0f1733;
-      --card2:#101b3d;
       --text:#eaf0ff;
       --muted:#a9b7e6;
       --accent:#7c5cff;
@@ -28,13 +27,10 @@
                   var(--bg);
       color:var(--text);
     }
-    .wrap{max-width:1200px;margin:0 auto;padding:28px 18px 60px}
-    .top{
-      display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;
-      margin-bottom:18px;
-    }
+    .wrap{max-width:1280px;margin:0 auto;padding:28px 18px 60px}
+    .top{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
     .brand h1{margin:0;font-size:28px;letter-spacing:.3px}
-    .brand p{margin:8px 0 0;color:var(--muted);max-width:720px;line-height:1.35}
+    .brand p{margin:8px 0 0;color:var(--muted);max-width:760px;line-height:1.35}
     .panel{
       display:flex;gap:10px;flex-wrap:wrap;align-items:center;
       background:rgba(255,255,255,.04);
@@ -65,6 +61,7 @@
     }
     .grid{display:grid;grid-template-columns:1.25fr .75fr;gap:16px;margin-top:16px}
     @media (max-width: 980px){ .grid{grid-template-columns:1fr} }
+
     .card{
       background:linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
       border:1px solid var(--line);
@@ -75,6 +72,9 @@
     .card h2{margin:0 0 8px;font-size:16px;color:var(--text)}
     .sub{color:var(--muted);font-size:12px;margin:0 0 12px}
     .row{display:flex;gap:12px;flex-wrap:wrap}
+    .kpi{display:flex;flex-direction:column;gap:6px;padding:12px;border-radius:14px;border:1px solid var(--line);background:rgba(255,255,255,.03);min-width:180px}
+    .kpi .v{font-size:18px;font-weight:800}
+    .kpi .l{font-size:12px;color:var(--muted)}
     .pill{
       display:inline-flex;align-items:center;gap:8px;
       padding:7px 10px;border-radius:999px;
@@ -83,31 +83,40 @@
       color:var(--muted);
       font-size:12px;
     }
-    .kpi{display:flex;flex-direction:column;gap:6px;padding:12px;border-radius:14px;border:1px solid var(--line);background:rgba(255,255,255,.03);min-width:180px}
-    .kpi .v{font-size:18px;font-weight:800}
-    .kpi .l{font-size:12px;color:var(--muted)}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+    .hr{height:1px;background:var(--line);margin:14px 0}
+
     .bots{display:grid;grid-template-columns:repeat(3, 1fr);gap:12px}
     @media (max-width: 980px){ .bots{grid-template-columns:1fr} }
-    .bot{
-      padding:14px;border-radius:16px;border:1px solid var(--line);
-      background:linear-gradient(180deg, rgba(16,27,61,.75), rgba(15,23,51,.65));
-    }
+
+    .bot{padding:14px;border-radius:16px;border:1px solid var(--line);background:linear-gradient(180deg, rgba(16,27,61,.75), rgba(15,23,51,.65))}
     .bot .t{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-    .name{font-weight:800}
+    .name{font-weight:900}
     .sig{font-weight:900;letter-spacing:.4px}
     .sig.buy{color:var(--good)}
     .sig.sell{color:var(--bad)}
     .sig.hold{color:var(--muted)}
-    .meta{color:var(--muted);font-size:12px;line-height:1.3}
+    .meta{color:var(--muted);font-size:12px;line-height:1.35}
     .bar{height:10px;border-radius:999px;background:rgba(255,255,255,.07);overflow:hidden;margin-top:10px}
     .bar > div{height:100%;background:linear-gradient(90deg, rgba(45,212,191,.9), rgba(124,92,255,.85));width:0%}
-    .small{font-size:12px;color:var(--muted)}
-    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
-    .hr{height:1px;background:var(--line);margin:14px 0}
+
     .news a{color:var(--text);text-decoration:none}
     .news a:hover{text-decoration:underline}
     .news-item{padding:10px 0;border-bottom:1px solid var(--line)}
     .news-item:last-child{border-bottom:none}
+
+    table{width:100%;border-collapse:collapse}
+    th, td{padding:10px 8px;border-bottom:1px solid var(--line);text-align:left;font-size:12px;color:var(--muted);vertical-align:top}
+    th{color:var(--text);font-size:12px}
+    .err{
+      margin-top:10px;
+      padding:10px 12px;
+      border:1px solid rgba(251,113,133,.35);
+      background:rgba(251,113,133,.08);
+      border-radius:12px;
+      color:#ffd3da;
+      font-size:12px;
+    }
   </style>
 </head>
 
@@ -153,31 +162,42 @@
         <h2>Fight Results</h2>
         <p class="sub">Signals + bankroll progress toward $150k</p>
 
-        <div class="row" id="kpis">
-          <div class="kpi">
-            <div class="l">Price</div>
-            <div class="v" id="price">—</div>
-          </div>
-          <div class="kpi">
-            <div class="l">Change %</div>
-            <div class="v" id="chg">—</div>
-          </div>
-          <div class="kpi">
-            <div class="l">Avg news sentiment</div>
-            <div class="v" id="sent">—</div>
-          </div>
-          <div class="kpi">
-            <div class="l">Learning speed</div>
-            <div class="v" id="speedLabel">—</div>
-          </div>
+        <div class="row">
+          <div class="kpi"><div class="l">Price</div><div class="v" id="price">—</div></div>
+          <div class="kpi"><div class="l">Change %</div><div class="v" id="chg">—</div></div>
+          <div class="kpi"><div class="l">Avg news sentiment</div><div class="v" id="sent">—</div></div>
+          <div class="kpi"><div class="l">Winner (highest confidence)</div><div class="v" id="winner">—</div></div>
         </div>
 
         <div class="hr"></div>
 
         <div class="bots" id="bots"></div>
 
+        <div id="errorBox" class="err" style="display:none"></div>
+
         <div class="hr"></div>
-        <div class="small mono" id="trades">Trades: —</div>
+
+        <h2 style="margin-top:0">Trade Ledger (Most Recent)</h2>
+        <p class="sub">Shows BUY/SELL + the bot’s rationale</p>
+        <div class="mono" id="tradesMeta" style="margin-bottom:8px;color:var(--muted);font-size:12px">—</div>
+        <div style="overflow:auto">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Bot</th>
+                <th>Side</th>
+                <th>Symbol</th>
+                <th>Qty</th>
+                <th>Price</th>
+                <th>Why</th>
+              </tr>
+            </thead>
+            <tbody id="tradesTable">
+              <tr><td colspan="7">—</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div class="card">
@@ -204,24 +224,38 @@
     if (typeof x !== 'number') return '—';
     return '$' + x.toLocaleString(undefined, { maximumFractionDigits: 0 });
   }
-
   function pct(x){
     if (typeof x !== 'number') return '—';
     return x.toFixed(2) + '%';
   }
-
   function sigClass(s){
     const x = String(s||'').toUpperCase();
     if (x === 'BUY') return 'buy';
     if (x === 'SELL') return 'sell';
     return 'hold';
   }
+  function showError(msg){
+    const box = $('errorBox');
+    if (!msg){
+      box.style.display = 'none';
+      box.textContent = '';
+      return;
+    }
+    box.style.display = 'block';
+    box.textContent = msg;
+  }
 
   async function apiGet(url){
     const r = await fetch(url);
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Request failed');
-    return j;
+    const text = await r.text();
+    // If server returns HTML, this avoids the cryptic "<" JSON error:
+    try{
+      const j = JSON.parse(text);
+      if (!r.ok) throw new Error(j.error || 'Request failed');
+      return j;
+    }catch{
+      throw new Error(`API returned non-JSON. Check server route: ${url}`);
+    }
   }
 
   async function apiPost(url, body){
@@ -230,9 +264,14 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Request failed');
-    return j;
+    const text = await r.text();
+    try{
+      const j = JSON.parse(text);
+      if (!r.ok) throw new Error(j.error || 'Request failed');
+      return j;
+    }catch{
+      throw new Error(`API returned non-JSON. Check server route: ${url}`);
+    }
   }
 
   async function loadMeta(){
@@ -245,7 +284,6 @@
 
       const s = await apiGet('/api/settings');
       $('learningSpeed').value = s.learningSpeed;
-      $('speedLabel').textContent = s.learningSpeed === 'accelerated' ? 'Accelerated' : 'Real-time';
     }catch(e){
       $('health').textContent = e.message;
     }
@@ -254,41 +292,63 @@
   async function saveLearningSpeed(){
     const learningSpeed = $('learningSpeed').value;
     await apiPost('/api/settings/learning-speed', { learningSpeed });
-    $('speedLabel').textContent = learningSpeed === 'accelerated' ? 'Accelerated' : 'Real-time';
   }
 
-  async function loadNews(symbol){
-    try{
-      const r = await apiGet(`/api/news/${encodeURIComponent(symbol)}`);
-      const news = r.news || [];
-      if (!news.length){
-        $('news').innerHTML = '<div class="small">No news found.</div>';
-        return;
-      }
-      $('news').innerHTML = news.slice(0,8).map(n => `
-        <div class="news-item">
-          <div style="font-weight:700;margin-bottom:4px">
-            <a href="${n.url}" target="_blank" rel="noreferrer">${n.title || 'Untitled'}</a>
-          </div>
-          <div class="small">
-            ${n.source || ''} • ${new Date(n.publishedAt).toLocaleString()} • sentiment: ${Number(n.sentiment || 0).toFixed(2)}
-          </div>
-        </div>
-      `).join('');
-    }catch(e){
-      $('news').innerHTML = `<div class="small">News error: ${e.message}</div>`;
+  function renderNews(news){
+    if (!news || !news.length){
+      $('news').innerHTML = '<div style="color:var(--muted);font-size:12px">No news found.</div>';
+      return;
     }
+    $('news').innerHTML = news.slice(0,8).map(n => `
+      <div class="news-item">
+        <div style="font-weight:800;margin-bottom:4px">
+          <a href="${n.url}" target="_blank" rel="noreferrer">${n.title || 'Untitled'}</a>
+        </div>
+        <div style="color:var(--muted);font-size:12px;line-height:1.3">
+          ${n.source || ''} • ${new Date(n.publishedAt).toLocaleString()} • sentiment: ${Number(n.sentiment || 0).toFixed(2)}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function renderTrades(rows){
+    const body = $('tradesTable');
+    if (!rows || !rows.length){
+      body.innerHTML = `<tr><td colspan="7">No trades yet. Run the fight a few times.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows.map(r => `
+      <tr>
+        <td class="mono">${new Date(r.created_at).toLocaleString()}</td>
+        <td class="mono">${r.strategy}</td>
+        <td class="mono">${r.side}</td>
+        <td class="mono">${r.symbol}</td>
+        <td class="mono">${Number(r.qty).toFixed(4)}</td>
+        <td class="mono">${Number(r.price).toFixed(2)}</td>
+        <td>${(r.note || '').replaceAll('rationale=','')}</td>
+      </tr>
+    `).join('');
+  }
+
+  async function refreshLedger(){
+    const r = await apiGet('/api/trades/recent?limit=25');
+    $('tradesMeta').textContent = `Showing latest ${r.rows.length} trades`;
+    renderTrades(r.rows);
   }
 
   async function runFight(){
+    showError(null);
+
     const symbol = $('symbol').value.trim().toUpperCase();
     if (!symbol) return;
 
-    $('trades').textContent = 'Trades: thinking...';
-    $('bots').innerHTML = '<div class="small">Running bots fight...</div>';
+    $('price').textContent = '—';
+    $('chg').textContent = '—';
+    $('sent').textContent = '—';
+    $('winner').textContent = '—';
+    $('bots').innerHTML = '<div style="color:var(--muted);font-size:12px">Running bots fight...</div>';
 
     try{
-      // Save speed first (so backend uses it)
       await saveLearningSpeed();
 
       const r = await apiGet(`/api/fight/${encodeURIComponent(symbol)}`);
@@ -296,17 +356,15 @@
       $('price').textContent = money(r.quote?.price);
       $('chg').textContent = pct(r.quote?.changePercent);
       $('sent').textContent = (r.features?.avgSent ?? 0).toFixed(2);
-      $('speedLabel').textContent = r.learningSpeed === 'accelerated' ? 'Accelerated' : 'Real-time';
+      $('winner').textContent = r.winner || '—';
 
-      // bots status blocks (bankroll progress)
       const status = r.status || [];
+      const botBy = Object.fromEntries((r.bots || []).map(b => [b.strategy, b]));
+
       $('bots').innerHTML = status.map(s => {
         const progress = s.progressPct ?? 0;
-        const posCount = (s.positions || []).length;
-
-        // map to latest decision for readability
-        const d = (r.bots || []).find(x => x.strategy === s.strategy) || {};
-        const signal = String(d.signal || 'HOLD').toUpperCase();
+        const bot = botBy[s.strategy] || {};
+        const signal = String(bot.signal || 'HOLD').toUpperCase();
 
         return `
           <div class="bot">
@@ -314,45 +372,44 @@
               <div class="name">${s.strategy}</div>
               <div class="sig ${sigClass(signal)}">${signal}</div>
             </div>
-
             <div class="meta">
-              Equity: <b>${money(s.equity)}</b> &nbsp; • &nbsp; Cash: ${money(s.cash)}<br/>
-              Goal: ${money(s.targetCash)} &nbsp; • &nbsp; Positions: ${posCount}<br/>
-              <span class="small">${d.rationale || ''}</span>
+              <b>${bot.rationale || ''}</b><br/>
+              Horizon: ${bot.horizon || '—'} • Confidence: ${bot.confidence ?? '—'}% • Samples: ${bot.samples ?? 0}<br/>
+              Equity: <b>${money(s.equity)}</b> • Cash: ${money(s.cash)} • Positions: ${(s.positions||[]).length}
             </div>
 
             <div class="bar"><div style="width:${progress.toFixed(2)}%"></div></div>
-            <div class="small" style="margin-top:8px">
+            <div class="meta" style="margin-top:8px">
               Progress: <b>${progress.toFixed(2)}%</b> (from ${money(s.startingCash)} → ${money(s.targetCash)})
             </div>
+
+            ${(s.positions||[]).length ? `
+              <div class="hr"></div>
+              <div class="meta"><b>Positions</b></div>
+              <div class="meta mono">
+                ${(s.positions||[]).slice(0,6).map(p => `${p.symbol}: ${Number(p.qty).toFixed(4)} @ ${Number(p.avg_price).toFixed(2)}`).join('<br/>')}
+              </div>
+            ` : ''}
           </div>
         `;
       }).join('');
 
-      const trades = r.trades || [];
-      if (!trades.length){
-        $('trades').textContent = 'Trades: none (bots held or trade size too small)';
-      } else {
-        $('trades').textContent = 'Trades: ' + trades.map(t =>
-          `${t.strategy} ${t.side} ${t.symbol} @ ${t.price.toFixed(2)}`
-        ).join(' | ');
-      }
-
-      await loadNews(symbol);
+      renderNews(r.news || []);
+      await refreshLedger();
     }catch(e){
-      $('bots').innerHTML = `<div class="small">Error: ${e.message}</div>`;
-      $('trades').textContent = 'Trades: —';
+      showError(e.message);
+      $('bots').innerHTML = `<div style="color:var(--muted);font-size:12px">—</div>`;
     }
   }
 
   $('learningSpeed').addEventListener('change', async () => {
-    try{ await saveLearningSpeed(); }catch(e){}
+    try{ await saveLearningSpeed(); }catch{}
   });
 
   $('runFight').addEventListener('click', runFight);
   $('refresh').addEventListener('click', async () => { await loadMeta(); await runFight(); });
 
-  loadMeta().then(runFight);
+  loadMeta().then(() => runFight());
 </script>
 </body>
 </html>
