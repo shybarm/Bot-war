@@ -31,7 +31,7 @@ export async function initDb() {
 
   await p.query("SELECT 1;");
 
-  // Stores evaluated learning outcomes used for accuracy
+  // Evaluated outcomes used for scoring accuracy
   await p.query(`
     CREATE TABLE IF NOT EXISTS learning_events (
       id BIGSERIAL PRIMARY KEY,
@@ -51,7 +51,7 @@ export async function initDb() {
     ON learning_events(symbol, strategy, horizon, created_at DESC);
   `);
 
-  // Stores bot decisions before evaluation
+  // Raw bot decisions waiting to be evaluated later
   await p.query(`
     CREATE TABLE IF NOT EXISTS bot_decisions (
       id BIGSERIAL PRIMARY KEY,
@@ -69,6 +69,11 @@ export async function initDb() {
       price_after DOUBLE PRECISION,
       outcome_pct DOUBLE PRECISION
     );
+  `);
+
+  await p.query(`
+    CREATE INDEX IF NOT EXISTS idx_bot_decisions_symbol_created
+    ON bot_decisions(symbol, created_at DESC);
   `);
 
   await p.query(`
@@ -168,7 +173,6 @@ export async function markDecisionEvaluated({ id, priceAfter }) {
   const p = getPool();
   if (!p) return null;
 
-  // Get decision to compute outcome
   const d = await p.query(`SELECT * FROM bot_decisions WHERE id=$1`, [id]);
   const row = d.rows[0];
   if (!row) return null;
@@ -188,4 +192,75 @@ export async function markDecisionEvaluated({ id, priceAfter }) {
   );
 
   return upd.rows[0];
+}
+
+export async function getLearningSummary({ symbol, limit = 200 }) {
+  const p = getPool();
+  if (!p) {
+    return {
+      hasDb: false,
+      symbol: symbol?.toUpperCase?.() || symbol,
+      pending: 0,
+      evaluated: 0,
+      samplesByStrategy: {},
+      accuracyByStrategy: {}
+    };
+  }
+
+  const sym = symbol.toUpperCase();
+
+  const pendingQ = await p.query(
+    `SELECT COUNT(*)::int AS n
+     FROM bot_decisions
+     WHERE symbol=$1 AND evaluated_at IS NULL;`,
+    [sym]
+  );
+
+  const evaluatedQ = await p.query(
+    `SELECT COUNT(*)::int AS n
+     FROM bot_decisions
+     WHERE symbol=$1 AND evaluated_at IS NOT NULL;`,
+    [sym]
+  );
+
+  const eventsQ = await p.query(
+    `SELECT strategy, signal, outcome_pct
+     FROM learning_events
+     WHERE symbol=$1
+     ORDER BY created_at DESC
+     LIMIT $2;`,
+    [sym, limit]
+  );
+
+  const rows = eventsQ.rows || [];
+  const samplesByStrategy = {};
+  const correctByStrategy = {};
+
+  for (const r of rows) {
+    const st = r.strategy || "unknown";
+    samplesByStrategy[st] = (samplesByStrategy[st] || 0) + 1;
+
+    const ok =
+      (r.signal === "BUY" && r.outcome_pct > 0) ||
+      (r.signal === "SELL" && r.outcome_pct < 0) ||
+      (r.signal === "HOLD" && Math.abs(r.outcome_pct) < 2);
+
+    if (ok) correctByStrategy[st] = (correctByStrategy[st] || 0) + 1;
+  }
+
+  const accuracyByStrategy = {};
+  for (const st of Object.keys(samplesByStrategy)) {
+    const s = samplesByStrategy[st];
+    const c = correctByStrategy[st] || 0;
+    accuracyByStrategy[st] = s ? Number(((c / s) * 100).toFixed(1)) : 0;
+  }
+
+  return {
+    hasDb: true,
+    symbol: sym,
+    pending: pendingQ.rows[0]?.n || 0,
+    evaluated: evaluatedQ.rows[0]?.n || 0,
+    samplesByStrategy,
+    accuracyByStrategy
+  };
 }
