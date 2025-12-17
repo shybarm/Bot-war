@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import fetch from "node-fetch";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -51,8 +50,8 @@ function sentimentScore(text) {
   return Math.max(-1, Math.min(1, s));
 }
 
-// Default: NewsAPI. (You said you changed provider; keep this working by using your provider’s key here.)
-// If you now use Finnhub news, swap this implementation later — but keep it as-is if it works for you.
+// NOTE: You said you changed provider and it works now.
+// Keep using NEWS_API_KEY here as your provider key.
 async function newsFor(symbol) {
   if (!process.env.NEWS_API_KEY) throw new Error("NEWS_API_KEY missing");
 
@@ -61,6 +60,7 @@ async function newsFor(symbol) {
   const to = today.toISOString().slice(0, 10);
   const from = weekAgo.toISOString().slice(0, 10);
 
+  // If your provider is NOT newsapi.org, update this URL later.
   const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(symbol)}&from=${from}&to=${to}&sortBy=relevancy&apiKey=${process.env.NEWS_API_KEY}`;
   const r = await fetch(url);
   const j = await r.json();
@@ -111,7 +111,7 @@ Return VALID JSON ONLY:
  "stopLoss":number,
  "timeHorizon":"short|medium|long"
 }
-`.\db?.trim?.() || prompt.trim(); // harmless safeguard
+`.trim();
 
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -125,7 +125,7 @@ Return VALID JSON ONLY:
       max_tokens: 350,
       messages: [
         { role: "system", content: "You are a cautious market analyst. Output JSON only." },
-        { role: "user", content: prompt.trim() }
+        { role: "user", content: prompt }
       ]
     })
   });
@@ -180,7 +180,7 @@ async function evaluateDueDecisions(limit = 20) {
         stored += 1;
       }
     } catch {
-      // Leave decision pending if price fetch fails; do not crash the app
+      // keep pending if price fetch fails; do not crash
     }
   }
 
@@ -209,16 +209,15 @@ function botSignal(strategy, features) {
     return { signal: "HOLD", horizon: "medium", rationale: "No clear swing setup" };
   }
 
-  // day_trade
   if (changePercent > 1.2) return { signal: "BUY", horizon: "short", rationale: "Strong intraday move" };
   if (changePercent < -1.2) return { signal: "SELL", horizon: "short", rationale: "Sharp intraday drop" };
   return { signal: "HOLD", horizon: "short", rationale: "Noise range" };
 }
 
 function horizonToEvalAfterSec(horizon) {
-  if (horizon === "short") return 4 * 60 * 60;        // 4 hours
-  if (horizon === "medium") return 3 * 24 * 60 * 60;  // 3 days
-  return 14 * 24 * 60 * 60;                           // 14 days
+  if (horizon === "short") return 4 * 60 * 60;
+  if (horizon === "medium") return 3 * 24 * 60 * 60;
+  return 14 * 24 * 60 * 60;
 }
 
 async function scoreBots(symbol, bots) {
@@ -319,7 +318,6 @@ app.get("/api/bots/:symbol", async (req, res) => {
       };
     });
 
-    // Log decisions for learning
     let logged = 0;
     if (hasDb()) {
       try {
@@ -337,7 +335,7 @@ app.get("/api/bots/:symbol", async (req, res) => {
         );
         logged = botsRaw.length;
       } catch {
-        logged = 0; // DB temporarily unavailable; keep serving
+        logged = 0;
       }
     }
 
