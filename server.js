@@ -23,8 +23,8 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT) || 8080;
 
-// Change this string when you deploy so you can confirm Railway is running the latest build
-const APP_VERSION = "learning-debug-v1";
+// ✅ bump version so you can confirm Railway redeployed
+const APP_VERSION = "learning-debug-v2";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,8 +57,6 @@ function sentimentScore(text) {
 }
 
 async function newsFor(symbol) {
-  // You said you changed provider and it works now.
-  // Keep using NEWS_API_KEY as your provider key.
   if (!process.env.NEWS_API_KEY) throw new Error("NEWS_API_KEY missing");
 
   const today = new Date();
@@ -144,7 +142,6 @@ function botSignal(strategy, features) {
     return { signal: "HOLD", horizon: "medium", rationale: "No clear swing setup" };
   }
 
-  // day trade
   if (changePercent > 1.2) return { signal: "BUY", horizon: "short", rationale: "Strong intraday move" };
   if (changePercent < -1.2) return { signal: "SELL", horizon: "short", rationale: "Sharp intraday drop" };
   return { signal: "HOLD", horizon: "short", rationale: "Noise range" };
@@ -203,46 +200,9 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-app.get("/api/market-overview", async (req, res) => {
-  try {
-    const symbols = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META", "AMD"];
-    const rows = await Promise.all(symbols.map(async (s) => {
-      const q = await finnhubQuote(s);
-      return { symbol: s, price: q.price, change: q.changePercent };
-    }));
-    res.json(rows);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get("/api/news/:symbol", async (req, res) => {
-  try {
-    const symbol = req.params.symbol.toUpperCase();
-    const news = await newsFor(symbol);
-    res.json({ symbol, news });
-  } catch (e) {
-    res.status(500).json({ error: e.message, news: [] });
-  }
-});
-
-app.get("/api/analyze/:symbol", async (req, res) => {
-  try {
-    await evaluateDueDecisions(10);
-
-    const symbol = req.params.symbol.toUpperCase();
-    const [quote, news] = await Promise.all([finnhubQuote(symbol), newsFor(symbol)]);
-
-    // minimal analysis for now (your UI is already working)
-    res.json({ symbol, quote, news: news.slice(0, 6), analysis: { signal: "HOLD", confidence: 50, reasoning: "Analysis placeholder" } });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 app.get("/api/bots/:symbol", async (req, res) => {
   try {
-    await evaluateDueDecisions(20);
+    await evaluateDueDecisions(10);
 
     const symbol = req.params.symbol.toUpperCase();
     const [quote, news] = await Promise.all([finnhubQuote(symbol), newsFor(symbol)]);
@@ -292,16 +252,6 @@ app.get("/api/bots/:symbol", async (req, res) => {
   }
 });
 
-app.post("/api/evaluate", async (req, res) => {
-  try {
-    const limit = Number(req.body?.limit) || 20;
-    const result = await evaluateDueDecisions(Math.min(50, Math.max(1, limit)));
-    res.json({ success: true, ...result });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 app.get("/api/learning/summary/:symbol", async (req, res) => {
   try {
     const symbol = req.params.symbol.toUpperCase();
@@ -336,6 +286,37 @@ app.get("/api/db/recent-decisions/:symbol", async (req, res) => {
   try {
     const x = await dbRecentDecisions(req.params.symbol.toUpperCase(), 10);
     res.json(x);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ✅ Insert test: if this works, bot logging will work
+app.get("/api/db/insert-test/:symbol", async (req, res) => {
+  try {
+    const symbol = req.params.symbol.toUpperCase();
+    if (!hasDb()) return res.status(400).json({ error: "DATABASE_URL missing" });
+
+    const row = await logBotDecision({
+      symbol,
+      strategy: "test_strategy",
+      horizon: "short",
+      signal: "HOLD",
+      priceAtSignal: 123.45,
+      evalAfterSec: 60
+    });
+
+    res.json({ ok: true, inserted: row });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post("/api/evaluate", async (req, res) => {
+  try {
+    const limit = Number(req.body?.limit) || 20;
+    const result = await evaluateDueDecisions(Math.min(50, Math.max(1, limit)));
+    res.json({ success: true, ...result });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
