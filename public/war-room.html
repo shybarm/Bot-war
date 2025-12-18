@@ -2,218 +2,150 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>War Room</title>
-
-  <script src="https://cdn.tailwindcss.com"></script>
-
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.1/dist/tailwind.min.css">
   <style>
     body{
-      background: radial-gradient(1100px 700px at 25% 10%, rgba(239,68,68,.14), transparent 60%),
-                  radial-gradient(900px 600px at 75% 65%, rgba(99,102,241,.18), transparent 55%),
-                  #050814;
-      color:#e5e7eb;
+      background:
+        radial-gradient(1200px 700px at 20% 10%, rgba(120,119,198,.22), transparent 55%),
+        radial-gradient(900px 600px at 80% 15%, rgba(236,72,153,.14), transparent 55%),
+        radial-gradient(900px 600px at 70% 90%, rgba(34,211,238,.10), transparent 55%),
+        #070a12;
+      color: rgba(255,255,255,.92);
     }
     .glass{
-      background: rgba(17,24,39,.58);
-      border: 1px solid rgba(255,255,255,.08);
-      box-shadow: 0 18px 70px rgba(0,0,0,.45);
-      backdrop-filter: blur(14px);
+      background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.045));
+      border: 1px solid rgba(255,255,255,.10);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 18px 80px rgba(0,0,0,.55);
     }
-    .chip{
-      border:1px solid rgba(255,255,255,.12);
-      background: rgba(255,255,255,.06);
-    }
-    .muted{ color: rgba(229,231,235,.72); }
-
-    /* Drawer */
-    .drawer-bg{
-      background: rgba(0,0,0,.58);
-      backdrop-filter: blur(6px);
-    }
-    .drawer{
-      background: rgba(17,24,39,.72);
-      border-left: 1px solid rgba(255,255,255,.08);
-      box-shadow: -20px 0 70px rgba(0,0,0,.55);
-      backdrop-filter: blur(16px);
-    }
+    .muted{color: rgba(255,255,255,.62);}
   </style>
 </head>
-
-<body class="min-h-screen overflow-x-hidden">
-  <div class="max-w-6xl mx-auto px-6 py-10">
-    <!-- Header -->
-    <div class="flex items-start justify-between gap-6">
+<body class="min-h-screen">
+  <div class="max-w-6xl mx-auto px-4 py-6">
+    <div class="flex items-start justify-between gap-3">
       <div>
-        <h1 class="text-4xl font-bold tracking-tight">⚔️ War Room</h1>
-        <p class="mt-2 muted max-w-2xl">
-          Real-time command center: carousel ticks, bot fights, trades, learning evaluations.
-          Market-hours gate included.
-        </p>
+        <div class="text-4xl font-extrabold tracking-tight flex items-center gap-3">⚔️ War Room</div>
+        <div class="muted mt-1">Real-time command center: carousel ticks, bot fights, trades, learning evaluations.</div>
       </div>
-      <div class="flex items-center gap-3">
-        <a href="/" class="chip px-4 py-2 rounded-xl hover:opacity-90">← Arena</a>
-        <a href="/api/runner/status" target="_blank" class="chip px-4 py-2 rounded-xl hover:opacity-90">Runner Status</a>
+      <div class="flex items-center gap-2">
+        <a class="px-3 py-2 rounded-xl glass hover:opacity-90" href="/">← Arena</a>
+        <a class="px-3 py-2 rounded-xl glass hover:opacity-90" href="/api/runner/status" target="_blank">Runner Status</a>
       </div>
     </div>
 
-    <!-- Main layout -->
-    <div class="grid lg:grid-cols-12 gap-6 mt-8">
-      <!-- Left rail -->
-      <div class="lg:col-span-4 glass rounded-2xl p-6">
-        <h2 class="text-xl font-semibold">Bot bankrolls</h2>
-        <p class="text-sm muted mt-1">$100k start → $150k goal</p>
-
-        <!-- CLICKABLE bot cards live here -->
-        <div id="bankrollBox" class="mt-4 space-y-3">
-          <div class="muted">Loading…</div>
-        </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-6">
+      <!-- Left -->
+      <div class="glass rounded-2xl p-4">
+        <div class="text-lg font-extrabold">Bot bankrolls</div>
+        <div class="muted text-sm">$100k start → $150k goal</div>
+        <div id="bankrollGrid" class="mt-3 grid gap-2"></div>
 
         <div class="mt-6">
-          <h3 class="font-semibold">Runner</h3>
-          <div id="runnerInfo" class="mt-3 space-y-2 text-sm muted">
-            <div>Loading…</div>
-          </div>
+          <div class="text-lg font-extrabold">Runner</div>
+          <div id="runnerInfo" class="muted text-sm mt-2">Loading…</div>
         </div>
 
-        <div class="mt-6 chip rounded-2xl p-4">
-          <div class="text-xs muted">Inspector</div>
-          <div class="text-sm mt-2">
-            Click any bot bankroll card to open the drawer. You’ll see full trade history and learning verdicts.
+        <div class="glass rounded-2xl p-4 mt-6">
+          <div class="text-xs muted uppercase tracking-wider">Inspector</div>
+          <div class="mt-2 text-sm">
+            Click a bot card to open trade history + learning context.
           </div>
         </div>
       </div>
 
-      <!-- Main feed -->
-      <div class="lg:col-span-8 glass rounded-2xl p-6">
-        <div class="flex items-center justify-between">
-          <h2 class="text-xl font-semibold">Live feed</h2>
-          <span id="wsStatus" class="chip px-3 py-1 rounded-lg text-xs muted">WS: connecting…</span>
+      <!-- Center/Right -->
+      <div class="glass rounded-2xl p-4 lg:col-span-2">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <div class="text-lg font-extrabold">Live feed</div>
+            <div class="muted text-sm">WebSocket-first • REST fallback</div>
+          </div>
+          <div id="wsStatus" class="px-3 py-2 rounded-xl glass text-xs">WS: connecting…</div>
         </div>
 
-        <div class="mt-4 grid md:grid-cols-2 gap-4">
-          <div class="chip rounded-2xl p-4">
-            <div class="text-xs muted">Current carousel symbol</div>
-            <div id="carouselSymbol" class="text-2xl font-bold mt-1">—</div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+          <div class="glass rounded-2xl p-4">
+            <div class="muted text-xs">Current carousel symbol</div>
+            <div id="curSymbol" class="text-3xl font-extrabold mt-2">—</div>
           </div>
-          <div class="chip rounded-2xl p-4">
-            <div class="text-xs muted">Last event</div>
+          <div class="glass rounded-2xl p-4">
+            <div class="muted text-xs">Last event</div>
             <div id="lastEvent" class="text-sm mt-2 muted">—</div>
           </div>
         </div>
 
         <div class="mt-5">
           <div class="flex items-center justify-between">
-            <h3 class="font-semibold">Reasoning + events</h3>
-            <span class="text-xs muted">WebSocket-first • REST fallback</span>
+            <div class="text-lg font-extrabold">Reasoning + events</div>
+            <div class="muted text-xs">Persisted via DB hydration</div>
           </div>
-          <div id="eventStream" class="mt-3 space-y-2 max-h-[420px] overflow-auto pr-2">
-            <div class="muted">Waiting for events…</div>
+          <div id="eventStream" class="mt-3 h-64 overflow-auto rounded-2xl glass p-3 text-sm">
+            <div class="muted">Loading…</div>
           </div>
         </div>
 
         <div class="mt-6">
           <div class="flex items-center justify-between">
-            <h3 class="font-semibold">Trades stream</h3>
-            <span class="text-xs muted">Most recent executions</span>
+            <div class="text-lg font-extrabold">Trades stream</div>
+            <div class="muted text-xs">Most recent executions</div>
           </div>
-          <div class="mt-3 overflow-x-auto">
-            <table class="min-w-full text-sm">
-              <thead class="muted">
-                <tr class="text-left">
-                  <th class="py-2 pr-3">Time</th>
-                  <th class="py-2 pr-3">Bot</th>
-                  <th class="py-2 pr-3">Side</th>
-                  <th class="py-2 pr-3">Symbol</th>
-                  <th class="py-2 pr-3">Qty</th>
-                  <th class="py-2 pr-3">Price</th>
-                  <th class="py-2">Why</th>
+          <div class="mt-3 overflow-auto rounded-2xl glass">
+            <table class="w-full text-sm">
+              <thead class="text-xs muted">
+                <tr>
+                  <th class="text-left p-3">Time</th>
+                  <th class="text-left p-3">Bot</th>
+                  <th class="text-left p-3">Side</th>
+                  <th class="text-left p-3">Symbol</th>
+                  <th class="text-left p-3">Qty</th>
+                  <th class="text-left p-3">Price</th>
+                  <th class="text-left p-3">Why</th>
                 </tr>
               </thead>
               <tbody id="tradeStreamBody">
-                <tr class="muted"><td class="py-3" colspan="7">—</td></tr>
+                <tr><td class="p-3 muted" colspan="7">—</td></tr>
               </tbody>
             </table>
           </div>
         </div>
-
       </div>
     </div>
   </div>
 
-  <!-- RIGHT-SIDE BOT DRAWER (Phase 3 shell) -->
-  <div id="drawerOverlay" class="hidden fixed inset-0 drawer-bg"></div>
-
-  <aside id="botDrawer"
-         class="hidden fixed top-0 right-0 h-full w-full sm:w-[520px] drawer">
-    <div class="h-full flex flex-col">
-      <!-- Drawer header -->
-      <div class="p-5 border-b border-white/10">
-        <div class="flex items-start justify-between gap-4">
-          <div>
-            <div class="text-xs muted">Bot Inspector</div>
-            <h3 id="drawerTitle" class="text-xl font-semibold mt-1">—</h3>
-            <div id="drawerSub" class="text-sm muted mt-1">—</div>
-          </div>
-          <button id="drawerClose" class="chip px-3 py-2 rounded-xl hover:opacity-90">Close</button>
-        </div>
-
-        <div class="mt-4 grid grid-cols-3 gap-3">
-          <div class="chip rounded-2xl p-3">
-            <div class="text-xs muted">Bankroll</div>
-            <div id="drawerCash" class="text-lg font-semibold mt-1">—</div>
-          </div>
-          <div class="chip rounded-2xl p-3">
-            <div class="text-xs muted">Win rate</div>
-            <div id="drawerWinRate" class="text-lg font-semibold mt-1">—</div>
-          </div>
-          <div class="chip rounded-2xl p-3">
-            <div class="text-xs muted">Trades</div>
-            <div id="drawerTradesCount" class="text-lg font-semibold mt-1">—</div>
-          </div>
-        </div>
+  <!-- Drawer -->
+  <div id="drawerBack" class="fixed inset-0 bg-black/60 hidden"></div>
+  <div id="drawer" class="fixed top-0 right-0 h-full w-full sm:w-[520px] glass border-l border-white/10 translate-x-full transition-transform duration-200">
+    <div class="p-4 flex items-center justify-between border-b border-white/10">
+      <div>
+        <div id="drawerTitle" class="font-extrabold text-lg">Bot</div>
+        <div id="drawerSub" class="muted text-sm">—</div>
       </div>
-
-      <!-- Drawer body -->
-      <div class="flex-1 overflow-auto p-5">
-        <div class="flex items-center justify-between">
-          <h4 class="font-semibold">Trade history</h4>
-          <span id="drawerLastUpdated" class="text-xs muted">—</span>
-        </div>
-
-        <div class="mt-3 overflow-x-auto">
-          <table class="min-w-full text-sm">
-            <thead class="muted">
-              <tr class="text-left">
-                <th class="py-2 pr-3">Time</th>
-                <th class="py-2 pr-3">Side</th>
-                <th class="py-2 pr-3">Symbol</th>
-                <th class="py-2 pr-3">Qty</th>
-                <th class="py-2 pr-3">Price</th>
-                <th class="py-2 pr-3">Learning</th>
-                <th class="py-2">Why</th>
-              </tr>
-            </thead>
-            <tbody id="drawerTradesBody">
-              <tr class="muted"><td class="py-3" colspan="7">Select a bot to load history…</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="mt-6 chip rounded-2xl p-4">
-          <div class="text-xs muted">Learning verdict legend</div>
-          <div class="mt-2 text-sm">
-            <span class="chip px-2 py-1 rounded-lg text-xs">WIN</span>
-            <span class="chip px-2 py-1 rounded-lg text-xs ml-2">LOSS</span>
-            <span class="chip px-2 py-1 rounded-lg text-xs ml-2">PENDING</span>
-          </div>
-          <div class="text-xs muted mt-2">
-            Verdicts are derived from learning sample evaluations after the configured horizon.
-          </div>
-        </div>
+      <button id="drawerClose" class="px-3 py-2 rounded-xl glass text-sm font-bold hover:opacity-90">Close</button>
+    </div>
+    <div class="p-4 overflow-auto h-[calc(100%-64px)]">
+      <div class="muted text-xs uppercase tracking-wider">Recent trades</div>
+      <table class="w-full text-sm mt-2">
+        <thead class="text-xs muted">
+          <tr>
+            <th class="text-left py-2">Time</th>
+            <th class="text-left py-2">Side</th>
+            <th class="text-left py-2">Symbol</th>
+            <th class="text-left py-2">Qty</th>
+            <th class="text-left py-2">Price</th>
+          </tr>
+        </thead>
+        <tbody id="drawerBody">
+          <tr><td class="py-3 muted" colspan="5">Loading…</td></tr>
+        </tbody>
+      </table>
+      <div class="mt-4 muted text-xs">
+        Hover the War Room trade stream “Why” for reasoning; learning verdicts are evaluated after the configured horizon.
       </div>
     </div>
-  </aside>
+  </div>
 
   <script src="/war-room.js"></script>
 </body>
