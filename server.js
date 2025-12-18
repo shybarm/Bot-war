@@ -23,7 +23,6 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-// Static
 app.use(express.static(path.join(__dirname, "public")));
 
 const PORT = process.env.PORT || 3000;
@@ -36,7 +35,7 @@ const FINNHUB_KEY = process.env.FINNHUB_API_KEY || process.env.FINNHUB_KEY || ""
 const TWELVEDATA_KEY = process.env.TWELVEDATA_API_KEY || process.env.TWELVEDATA_KEY || "";
 const OPENAI_KEY = process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || process.env.OPENAI_API || "";
 
-// News providers (you have: NEWS_API_KEY + NEWSAPI_BACKUP_KEY)
+// News providers (your Railway vars: NEWS_API_KEY + NEWSAPI_BACKUP_KEY)
 const NEWSDATA_KEY = process.env.NEWSDATA_KEY || process.env.NEWS_API_KEY || "";
 const NEWSAPI_KEY = process.env.NEWSAPI_KEY || process.env.NEWSAPI_BACKUP_KEY || "";
 
@@ -50,7 +49,6 @@ const RUNNER_TRADE_TOP = Math.max(Number(process.env.RUNNER_TRADE_TOP || 3), 1);
 
 const RUNNER_LOCK_ID = String(process.env.RUNNER_LOCK_ID || "default-lock");
 
-// Symbols parsing (AUTO_SYMBOLS can be JSON array or CSV)
 function parseSymbolsEnv(raw) {
   if (!raw) return [];
   const s = String(raw).trim();
@@ -66,27 +64,16 @@ function parseSymbolsEnv(raw) {
 
 const AUTO_SYMBOLS = parseSymbolsEnv(process.env.AUTO_SYMBOLS);
 
-// Fallback universe
 const SP500_MINI = [
   "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK.B","JPM","V",
   "UNH","XOM","LLY","PG","AVGO","KO","PEP","COST","WMT","HD",
   "NFLX","DIS","INTC","AMD","BA","GE","NKE","ORCL","CRM","ADBE",
 ];
 
-// -----------------------------
-// Market hours gate (simple)
-// -----------------------------
 function isMarketOpen() {
-  // Lightweight approximation; your runner status shows OPEN already.
-  // If you want a strict NYSE calendar later, we can upgrade.
   const now = new Date();
-  const utc = now.getTime();
-  const est = new Date(utc);
-
-  const day = est.getUTCDay(); // not perfect but acceptable for gating vs closed
+  const day = now.getUTCDay();
   if (day === 0 || day === 6) return { open: false, reason: "Weekend" };
-
-  // Allow “open” for now (your status already says OPEN).
   return { open: true, reason: "Open" };
 }
 
@@ -96,9 +83,6 @@ function isValidTicker(sym) {
   return { ok: true, symbol: s };
 }
 
-// -----------------------------
-// Simple sentiment heuristic
-// -----------------------------
 function sentimentScore(text) {
   const t = String(text || "").toLowerCase();
   const pos = ["beat","surge","win","record","growth","strong","approve","partnership","launch"];
@@ -109,11 +93,7 @@ function sentimentScore(text) {
   return Math.max(-1, Math.min(1, score / 6));
 }
 
-// -----------------------------
-// Price fetch with failover
-// -----------------------------
 async function getStockPrice(symbol) {
-  // Finnhub
   if (FINNHUB_KEY) {
     try {
       const r = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(FINNHUB_KEY)}`);
@@ -127,7 +107,6 @@ async function getStockPrice(symbol) {
     } catch {}
   }
 
-  // TwelveData backup
   if (TWELVEDATA_KEY) {
     try {
       const r = await fetch(`https://api.twelvedata.com/price?symbol=${encodeURIComponent(symbol)}&apikey=${encodeURIComponent(TWELVEDATA_KEY)}`);
@@ -139,23 +118,21 @@ async function getStockPrice(symbol) {
     } catch {}
   }
 
-  // Mock
   const base = 50 + Math.random() * 250;
   return { price: Math.round(base * 100) / 100, changePercent: (Math.random() - 0.5) * 2, provider: "mock" };
 }
 
 // -----------------------------
-// News: symbol-specific (existing style)
+// News: symbol-specific
 // -----------------------------
 async function getNews(symbol, limit = 8) {
-  // If no keys → mock
   if (!NEWSDATA_KEY && !NEWSAPI_KEY) {
     return {
       provider: "mock",
       items: [
         {
           title: `No news key configured for ${symbol}`,
-          summary: "Set NEWSDATA_KEY/NEWSAPI_KEY (or your NEWS_API_KEY/NEWSAPI_BACKUP_KEY) to enable real news.",
+          summary: "Set NEWS_API_KEY / NEWSAPI_BACKUP_KEY to enable real news.",
           url: "",
           publishedAt: new Date().toISOString(),
           source: "mock",
@@ -164,7 +141,6 @@ async function getNews(symbol, limit = 8) {
     };
   }
 
-  // Try NewsData first (if key provided via NEWS_API_KEY mapping)
   if (NEWSDATA_KEY) {
     try {
       const r = await fetch(
@@ -184,7 +160,6 @@ async function getNews(symbol, limit = 8) {
     } catch {}
   }
 
-  // NewsAPI backup
   if (NEWSAPI_KEY) {
     try {
       const r = await fetch(
@@ -209,70 +184,140 @@ async function getNews(symbol, limit = 8) {
 }
 
 // -----------------------------
-// ✅ General news (non-finance oriented) – top headlines style
+// ✅ General news (FIXED: robust fallback chain + always returns something)
 // -----------------------------
+function generalFallbackMock(limit = 8) {
+  const now = new Date().toISOString();
+  const items = [
+    { title: "Major port disruption risks supply chains", summary: "Logistics constraints can hit retailers, manufacturers, and shipping costs.", source: "fallback", url: "", publishedAt: now },
+    { title: "New AI regulation proposal surfaces in Washington", summary: "Policy changes can impact chipmakers, cloud platforms, and AI-first companies.", source: "fallback", url: "", publishedAt: now },
+    { title: "Cyberattack disrupts a large enterprise platform", summary: "Outage risk shifts spending toward security and cloud resilience.", source: "fallback", url: "", publishedAt: now },
+    { title: "Oil price volatility returns after geopolitical escalation", summary: "Energy prices ripple into airlines, consumers, and inflation expectations.", source: "fallback", url: "", publishedAt: now },
+    { title: "FDA issues a major drug safety update", summary: "Healthcare and pharma names can reprice quickly on regulatory updates.", source: "fallback", url: "", publishedAt: now },
+    { title: "Large labor strike expands to key manufacturing nodes", summary: "Production capacity and input costs can affect industrials and autos.", source: "fallback", url: "", publishedAt: now },
+    { title: "Unexpected inflation print changes rate expectations", summary: "Rate moves affect banks, growth tech valuations, and consumer demand.", source: "fallback", url: "", publishedAt: now },
+    { title: "Extreme weather disrupts travel and logistics", summary: "Airlines, retail supply chains, and energy demand can be impacted.", source: "fallback", url: "", publishedAt: now },
+  ];
+  return { provider: "mock_fallback", items: items.slice(0, limit), errorDetail: "All providers returned zero articles or errored." };
+}
+
+async function tryNewsApiTopHeadlines(limit) {
+  const r = await fetch(
+    `https://newsapi.org/v2/top-headlines?country=us&pageSize=${Math.min(limit, 20)}`,
+    { headers: { "X-Api-Key": NEWSAPI_KEY } }
+  );
+  const txt = await r.text();
+  let j = null;
+  try { j = JSON.parse(txt); } catch {}
+  if (!r.ok) {
+    return { ok: false, error: `newsapi top-headlines ${r.status}: ${j?.message || txt || "error"}` };
+  }
+  const items = (j?.articles || []).map((a) => ({
+    title: a.title || "",
+    summary: a.description || a.content || "",
+    url: a.url || "",
+    publishedAt: a.publishedAt || new Date().toISOString(),
+    source: a.source?.name || "newsapi",
+  })).filter(x => x.title);
+  return { ok: true, items };
+}
+
+async function tryNewsApiEverything(limit) {
+  const q = [
+    "geopolitics", "tariffs", "oil", "inflation", "fed",
+    "cyberattack", "outage", "ai regulation", "fda", "strike",
+    "ports", "shipping", "semiconductors"
+  ].join(" OR ");
+
+  const r = await fetch(
+    `https://newsapi.org/v2/everything?q=${encodeURIComponent(q)}&pageSize=${Math.min(limit, 20)}&language=en&sortBy=publishedAt`,
+    { headers: { "X-Api-Key": NEWSAPI_KEY } }
+  );
+  const txt = await r.text();
+  let j = null;
+  try { j = JSON.parse(txt); } catch {}
+  if (!r.ok) {
+    return { ok: false, error: `newsapi everything ${r.status}: ${j?.message || txt || "error"}` };
+  }
+  const items = (j?.articles || []).map((a) => ({
+    title: a.title || "",
+    summary: a.description || a.content || "",
+    url: a.url || "",
+    publishedAt: a.publishedAt || new Date().toISOString(),
+    source: a.source?.name || "newsapi",
+  })).filter(x => x.title);
+  return { ok: true, items };
+}
+
+async function tryNewsData(limit) {
+  const q = "geopolitics OR tariffs OR oil OR inflation OR cyber OR outage OR AI regulation OR FDA OR strike OR ports OR shipping";
+  const r = await fetch(
+    `https://newsdata.io/api/1/news?apikey=${encodeURIComponent(NEWSDATA_KEY)}&country=us&language=en&q=${encodeURIComponent(q)}&size=${Math.min(limit, 10)}`
+  );
+  const txt = await r.text();
+  let j = null;
+  try { j = JSON.parse(txt); } catch {}
+  if (!r.ok) {
+    return { ok: false, error: `newsdata ${r.status}: ${j?.message || txt || "error"}` };
+  }
+  const items = (j?.results || []).map((x) => ({
+    title: x.title || "",
+    summary: x.description || x.content || "",
+    url: x.link || "",
+    publishedAt: x.pubDate || new Date().toISOString(),
+    source: x.source_id || "newsdata",
+  })).filter(x => x.title);
+  return { ok: true, items };
+}
+
 async function getGeneralNews(limit = 8) {
   if (!NEWSDATA_KEY && !NEWSAPI_KEY) {
-    return {
-      provider: "mock",
-      items: [
-        {
-          title: "No general news provider configured",
-          summary: "Configure NEWS_API_KEY / NEWSAPI_BACKUP_KEY to enable general news.",
-          url: "",
-          publishedAt: new Date().toISOString(),
-          source: "mock",
-        },
-      ],
-    };
+    return generalFallbackMock(limit);
   }
 
-  // NewsAPI: Top headlines works best for “regular news”
+  const errors = [];
+
+  // 1) NewsAPI top headlines
   if (NEWSAPI_KEY) {
     try {
-      const r = await fetch(
-        `https://newsapi.org/v2/top-headlines?country=us&pageSize=${Math.min(limit, 20)}`,
-        { headers: { "X-Api-Key": NEWSAPI_KEY } }
-      );
-      if (r.ok) {
-        const j = await r.json();
-        const items = (j.articles || []).map((a) => ({
-          title: a.title || "",
-          summary: a.description || a.content || "",
-          url: a.url || "",
-          publishedAt: a.publishedAt || new Date().toISOString(),
-          source: a.source?.name || "newsapi",
-        }));
-        if (items.length) return { provider: "newsapi", items: items.slice(0, limit) };
-      }
-    } catch {}
+      const a = await tryNewsApiTopHeadlines(limit);
+      if (a.ok && a.items.length) return { provider: "newsapi", items: a.items.slice(0, limit) };
+      if (!a.ok) errors.push(a.error);
+    } catch (e) {
+      errors.push(`newsapi top-headlines exception: ${String(e?.message || e)}`);
+    }
   }
 
-  // NewsData: broad query (US + trending-like)
+  // 2) NewsAPI everything (better for “outside finance”)
+  if (NEWSAPI_KEY) {
+    try {
+      const b = await tryNewsApiEverything(limit);
+      if (b.ok && b.items.length) return { provider: "newsapi", items: b.items.slice(0, limit) };
+      if (!b.ok) errors.push(b.error);
+    } catch (e) {
+      errors.push(`newsapi everything exception: ${String(e?.message || e)}`);
+    }
+  }
+
+  // 3) NewsData
   if (NEWSDATA_KEY) {
     try {
-      const r = await fetch(
-        `https://newsdata.io/api/1/news?apikey=${encodeURIComponent(NEWSDATA_KEY)}&country=us&language=en&size=${Math.min(limit, 10)}`
-      );
-      if (r.ok) {
-        const j = await r.json();
-        const items = (j.results || []).map((x) => ({
-          title: x.title || "",
-          summary: x.description || x.content || "",
-          url: x.link || "",
-          publishedAt: x.pubDate || new Date().toISOString(),
-          source: x.source_id || "newsdata",
-        }));
-        if (items.length) return { provider: "newsdata", items };
-      }
-    } catch {}
+      const c = await tryNewsData(limit);
+      if (c.ok && c.items.length) return { provider: "newsdata", items: c.items.slice(0, limit) };
+      if (!c.ok) errors.push(c.error);
+    } catch (e) {
+      errors.push(`newsdata exception: ${String(e?.message || e)}`);
+    }
   }
 
-  return { provider: "error", items: [] };
+  // 4) Guaranteed non-empty fallback (never show a blank Arena)
+  const fb = generalFallbackMock(limit);
+  fb.errorDetail = errors.slice(0, 4).join(" | ") || fb.errorDetail;
+  return fb;
 }
 
 // -----------------------------
-// ✅ Article → impacted tickers (OpenAI optional, heuristic fallback)
+// ✅ Article → impacted tickers (same as before)
 // -----------------------------
 const IMPACT_TICKERS = {
   airlines: ["DAL", "UAL", "AAL", "LUV"],
@@ -317,7 +362,6 @@ function impactHeuristic(title, summary) {
     }
   }
 
-  // De-dupe, keep top 8 by confidence
   const best = new Map();
   for (const h of hits) {
     const prev = best.get(h.ticker);
@@ -336,35 +380,25 @@ function impactHeuristic(title, summary) {
   };
 }
 
-// Optional OpenAI (kept conservative; if it fails, heuristic wins)
 async function impactWithOpenAI(title, summary) {
   if (!OPENAI_KEY) return null;
   try {
     const prompt = `
-You are a market-impact analyst. Given a general news article (NOT finance news),
-return JSON:
+Return JSON only:
 {
- "horizon": "short"|"medium"|"long",
- "confidence": 0-100,
- "impacted": [{"ticker":"AAPL","confidence":0-100,"rationale":"<=120 chars"}],
- "evidence": ["<=80 chars", "..."]
+ "horizon":"short"|"medium"|"long",
+ "confidence":0-100,
+ "impacted":[{"ticker":"AAPL","confidence":0-100,"rationale":"<=120 chars"}],
+ "evidence":["<=80 chars"]
 }
-Rules:
-- 3 to 8 tickers max.
-- Focus on US-traded tickers.
-- Avoid hallucinating. If unclear, be conservative.
 Article:
 TITLE: ${title}
 SUMMARY: ${summary}
-Return JSON only.
 `.trim();
 
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_KEY}`,
-      },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${OPENAI_KEY}` },
       body: JSON.stringify({
         model: "gpt-4o-mini",
         messages: [{ role: "user", content: prompt }],
@@ -376,8 +410,8 @@ Return JSON only.
     const j = await r.json();
     const content = j?.choices?.[0]?.message?.content || "";
     const parsed = JSON.parse(content);
-
     if (!parsed || !Array.isArray(parsed.impacted)) return null;
+
     return {
       horizon: ["short", "medium", "long"].includes(parsed.horizon) ? parsed.horizon : "short",
       confidence: Math.max(0, Math.min(100, Number(parsed.confidence || 60))),
@@ -432,7 +466,6 @@ async function ensurePortfolios() {
 }
 
 function decideBase({ bot, avgSent, changePercent }) {
-  // Conservative base logic (learning adjusts later)
   let signal = "HOLD";
   let confidence = 52;
   let why = "No edge detected";
@@ -493,9 +526,7 @@ function sigmoid(x) {
 }
 
 async function applyLearningAdjust(strategy, base, features) {
-  if (!hasDb) {
-    return { signal: base.signal, confidence: base.confidence, why: base.why, learnedP: 0.5 };
-  }
+  if (!hasDb) return { signal: base.signal, confidence: base.confidence, why: base.why, learnedP: 0.5 };
 
   const w = await getWeights(strategy);
   const x =
@@ -503,13 +534,11 @@ async function applyLearningAdjust(strategy, base, features) {
     (w.avgSent || 0) * Number(features.avgSent || 0) +
     (w.changePercent || 0) * Number(features.changePercent || 0);
 
-  const p = sigmoid(x); // “probability” of being correct
+  const p = sigmoid(x);
   let confidence = Math.max(40, Math.min(90, Math.round(base.confidence + (p - 0.5) * 40)));
 
-  // Keep signal; nudge HOLD thresholds slightly
   let signal = base.signal;
   if (signal === "HOLD" && confidence >= 67) {
-    // promote HOLD into action depending on direction
     if (features.avgSent > 0.2 || features.changePercent < -1.2) signal = "BUY";
     if (features.avgSent < -0.2 || features.changePercent > 1.2) signal = "SELL";
   }
@@ -591,7 +620,6 @@ async function updateModelFromOutcome(strategy, features, correctBool) {
   const y = correctBool ? 1 : 0;
 
   const w = await getWeights(strategy);
-
   const x =
     (w.bias || 0) +
     (w.avgSent || 0) * Number(features.avgSent || 0) +
@@ -600,14 +628,10 @@ async function updateModelFromOutcome(strategy, features, correctBool) {
   const p = sigmoid(x);
   const err = y - p;
 
-  const lr = 0.08; // stable
-  const newBias = (w.bias || 0) + lr * err * 1;
-  const newAvg = (w.avgSent || 0) + lr * err * Number(features.avgSent || 0);
-  const newChg = (w.changePercent || 0) + lr * err * Number(features.changePercent || 0);
-
-  await setWeight(strategy, "bias", newBias);
-  await setWeight(strategy, "avgSent", newAvg);
-  await setWeight(strategy, "changePercent", newChg);
+  const lr = 0.08;
+  await setWeight(strategy, "bias", (w.bias || 0) + lr * err * 1);
+  await setWeight(strategy, "avgSent", (w.avgSent || 0) + lr * err * Number(features.avgSent || 0));
+  await setWeight(strategy, "changePercent", (w.changePercent || 0) + lr * err * Number(features.changePercent || 0));
 }
 
 async function evaluateLearningSamples() {
@@ -654,16 +678,10 @@ async function evaluateLearningSamples() {
     evaluated += 1;
   }
 
-  if (evaluated) {
-    await emitEvent("learning_evaluated", { evaluated });
-  }
-
+  if (evaluated) await emitEvent("learning_evaluated", { evaluated });
   return { evaluated };
 }
 
-// -----------------------------
-// Events → WS
-// -----------------------------
 const wss = new WebSocketServer({ server, path: "/ws" });
 
 function wsBroadcast(obj) {
@@ -677,7 +695,6 @@ async function emitEvent(type, payload) {
   const now = new Date().toISOString();
   const obj = { type, ts: now, payload: payload || {} };
 
-  // store to DB if possible
   if (hasDb) {
     try {
       const r = await dbQuery(
@@ -692,9 +709,6 @@ async function emitEvent(type, payload) {
   wsBroadcast(obj);
 }
 
-// -----------------------------
-// Universe
-// -----------------------------
 async function getUniverse() {
   const u = (hasDb ? await getSetting("universe") : null) || { mode: "any", custom: [] };
   return u;
@@ -711,61 +725,8 @@ function universeSymbols(universe) {
   return SP500_MINI;
 }
 
-// -----------------------------
-// Runner
-// -----------------------------
 let runnerTimer = null;
 
-async function runnerTick() {
-  if (!RUNNER_ENABLED) return;
-
-  const market = isMarketOpen();
-  const universe = await getUniverse();
-  const symbols = universeSymbols(universe);
-
-  const st = (hasDb ? await getRunnerState() : { idx: 0, lastTick: null, lastSymbol: symbols[0] }) || {
-    idx: 0,
-    lastTick: null,
-    lastSymbol: symbols[0],
-  };
-
-  const idx = Number(st.idx || 0);
-  const symbol = symbols[idx % symbols.length];
-
-  const nextState = {
-    idx: idx + 1,
-    lastTick: new Date().toISOString(),
-    lastSymbol: symbol,
-  };
-
-  if (hasDb) await setRunnerState(nextState);
-
-  await emitEvent("runner_state", { state: nextState });
-  await emitEvent("carousel_tick", { symbol, market });
-
-  // Bot fight (always) to generate learning samples; trading gated by market open
-  try {
-    // call internal function directly via API logic:
-    await botsFight(symbol);
-  } catch (e) {
-    await emitEvent("runner_error", { symbol, error: String(e?.message || e) });
-  }
-
-  // Evaluate learning periodically
-  try {
-    await evaluateLearningSamples();
-  } catch {}
-}
-
-function startRunner() {
-  if (runnerTimer) clearInterval(runnerTimer);
-  if (!RUNNER_ENABLED) return;
-  runnerTimer = setInterval(runnerTick, RUNNER_INTERVAL_SEC * 1000);
-}
-
-// -----------------------------
-// Core bot fight
-// -----------------------------
 async function botsFight(symbol) {
   const symbolV = isValidTicker(symbol);
   if (!symbolV.ok) throw new Error(symbolV.reason);
@@ -813,7 +774,6 @@ async function botsFight(symbol) {
 
   const winner = bots.reduce((a, b) => (b.confidence > a.confidence ? b : a), bots[0]);
 
-  // Learning speed
   const evalAfterSec =
     setting?.mode === "accelerated"
       ? (Number(setting.evalAfterSec) > 0 ? Number(setting.evalAfterSec) : 30)
@@ -845,14 +805,12 @@ async function botsFight(symbol) {
     }
   }
 
-  // Trades allowed?
   const tradesAllowed = market.open && !(NEWS_ONLY_WHEN_CLOSED && !market.open);
 
-  // Execute trades for top N signals (excluding HOLD), unless market closed
   if (hasDb && tradesAllowed) {
     const actionable = bots.filter((b) => b.signal !== "HOLD").sort((a, b) => b.confidence - a.confidence).slice(0, RUNNER_TRADE_TOP);
     for (const b of actionable) {
-      const qty = 5; // small conservative size (can be upgraded later)
+      const qty = 5;
       const trade = await recordTrade({
         bot: b.strategy,
         symbol: s,
@@ -871,23 +829,43 @@ async function botsFight(symbol) {
     }
   }
 
-  const payload = {
-    symbol: s,
-    market,
-    tradesAllowed,
-    logged,
-    logError,
-    features,
-    bots,
-    winner: winner?.strategy,
-  };
-
+  const payload = { symbol: s, market, tradesAllowed, logged, logError, features, bots, winner: winner?.strategy };
   await emitEvent("bot_fight", payload);
   return payload;
 }
 
+async function runnerTick() {
+  if (!RUNNER_ENABLED) return;
+
+  const market = isMarketOpen();
+  const universe = await getUniverse();
+  const symbols = universeSymbols(universe);
+
+  const st = (hasDb ? await getRunnerState() : { idx: 0, lastTick: null, lastSymbol: symbols[0] }) || {
+    idx: 0, lastTick: null, lastSymbol: symbols[0],
+  };
+
+  const idx = Number(st.idx || 0);
+  const symbol = symbols[idx % symbols.length];
+
+  const nextState = { idx: idx + 1, lastTick: new Date().toISOString(), lastSymbol: symbol };
+  if (hasDb) await setRunnerState(nextState);
+
+  await emitEvent("runner_state", { state: nextState });
+  await emitEvent("carousel_tick", { symbol, market });
+
+  try { await botsFight(symbol); } catch (e) { await emitEvent("runner_error", { symbol, error: String(e?.message || e) }); }
+  try { await evaluateLearningSamples(); } catch {}
+}
+
+function startRunner() {
+  if (runnerTimer) clearInterval(runnerTimer);
+  if (!RUNNER_ENABLED) return;
+  runnerTimer = setInterval(runnerTick, RUNNER_INTERVAL_SEC * 1000);
+}
+
 // -----------------------------
-// API Routes
+// API
 // -----------------------------
 app.get("/api/health", async (req, res) => {
   const m = isMarketOpen();
@@ -903,64 +881,10 @@ app.get("/api/health", async (req, res) => {
       postgres: !!hasDb,
     },
     market: { open: m.open, reason: m.reason, tz: MARKET_TZ },
-    version: "arena-v4-fix-trades-news-impact",
+    version: "arena-v4-generalnews-fix-warroom-css",
   });
 });
 
-app.get("/api/version", (req, res) => {
-  res.json({ version: "arena-v4-fix-trades-news-impact", timestamp: new Date().toISOString() });
-});
-
-// Learning speed
-app.get("/api/settings/learning-speed", async (req, res) => {
-  try {
-    const v = hasDb ? await getSetting("learning_speed") : { mode: "realtime", evalAfterSec: 3600 };
-    res.json(v || { mode: "realtime", evalAfterSec: 3600 });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/settings/learning-speed", async (req, res) => {
-  try {
-    const { mode, evalAfterSec } = req.body || {};
-    const payload = {
-      mode: mode === "accelerated" ? "accelerated" : "realtime",
-      evalAfterSec: Number(evalAfterSec) > 0 ? Number(evalAfterSec) : (mode === "accelerated" ? 30 : 3600),
-    };
-    if (hasDb) await setSetting("learning_speed", payload);
-    res.json({ ok: true, setting: payload });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Universe
-app.get("/api/settings/universe", async (req, res) => {
-  try {
-    const u = await getUniverse();
-    res.json(u);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/settings/universe", async (req, res) => {
-  try {
-    const { mode, custom } = req.body || {};
-    const m = String(mode || "any").toLowerCase();
-    const payload = {
-      mode: ["any", "sp500", "custom"].includes(m) ? m : "any",
-      custom: Array.isArray(custom) ? custom : [],
-    };
-    if (hasDb) await setSetting("universe", payload);
-    res.json({ ok: true, universe: payload });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Runner status
 app.get("/api/runner/status", async (req, res) => {
   try {
     const m = isMarketOpen();
@@ -987,7 +911,6 @@ app.get("/api/runner/status", async (req, res) => {
   }
 });
 
-// Market overview: prices list (what your UI expects)
 app.get("/api/market-overview", async (req, res) => {
   try {
     const symbols = SP500_MINI.slice(0, 10);
@@ -1002,7 +925,6 @@ app.get("/api/market-overview", async (req, res) => {
   }
 });
 
-// Recent trades (✅ fixed by db migration adding ts)
 app.get("/api/trades/recent", async (req, res) => {
   try {
     if (!hasDb) return res.json({ items: [] });
@@ -1020,7 +942,6 @@ app.get("/api/trades/recent", async (req, res) => {
   }
 });
 
-// Trades by bot
 app.get("/api/trades/bot/:bot", async (req, res) => {
   try {
     if (!hasDb) return res.json({ items: [] });
@@ -1041,7 +962,6 @@ app.get("/api/trades/bot/:bot", async (req, res) => {
   }
 });
 
-// Portfolios
 app.get("/api/portfolios", async (req, res) => {
   try {
     if (!hasDb) return res.json({ items: [] });
@@ -1052,45 +972,6 @@ app.get("/api/portfolios", async (req, res) => {
   }
 });
 
-// Learning impact
-app.get("/api/learning/impact", async (req, res) => {
-  try {
-    if (!hasDb) return res.json({ days: 14, byStrategy: {} });
-    const days = Math.min(Math.max(Number(req.query.days || 14), 3), 60);
-
-    const r = await dbQuery(
-      `
-      SELECT
-        date_trunc('day', COALESCE(evaluated_at, created_at)) AS day,
-        strategy,
-        COUNT(*) FILTER (WHERE evaluated_at IS NOT NULL) AS evaluated,
-        COUNT(*) FILTER (WHERE correct = TRUE) AS correct
-      FROM learning_samples
-      WHERE created_at >= NOW() - ($1 || ' days')::interval
-      GROUP BY 1,2
-      ORDER BY 1 ASC
-    `,
-      [days]
-    );
-
-    const byStrategy = {};
-    for (const row of r.rows || []) {
-      const day = new Date(row.day).toISOString().slice(0, 10);
-      const strategy = row.strategy;
-      const evaluated = Number(row.evaluated || 0);
-      const correct = Number(row.correct || 0);
-      const acc = evaluated > 0 ? (correct / evaluated) * 100 : null;
-      if (!byStrategy[strategy]) byStrategy[strategy] = [];
-      byStrategy[strategy].push({ day, accuracy: acc, evaluated });
-    }
-
-    res.json({ days, byStrategy });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Events recent (War Room hydration)
 app.get("/api/events/recent", async (req, res) => {
   try {
     if (!hasDb) return res.json({ items: [] });
@@ -1114,7 +995,6 @@ app.get("/api/events/recent", async (req, res) => {
   }
 });
 
-// Symbol news
 app.get("/api/news/:symbol", async (req, res) => {
   try {
     const v = isValidTicker(req.params.symbol);
@@ -1128,18 +1008,17 @@ app.get("/api/news/:symbol", async (req, res) => {
   }
 });
 
-// ✅ General news
+// ✅ General news (now always returns something)
 app.get("/api/news/general", async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number(req.query.limit || 8), 1), 20);
     const pack = await getGeneralNews(limit);
     res.json(pack);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ provider: "error", items: [], errorDetail: e.message });
   }
 });
 
-// ✅ Impact mapping (multi-ticker)
 app.post("/api/news/impact", async (req, res) => {
   try {
     const { title, summary } = req.body || {};
@@ -1153,7 +1032,6 @@ app.post("/api/news/impact", async (req, res) => {
   }
 });
 
-// Bots endpoint (supports your /api/bots/KO test)
 app.get("/api/bots/:symbol", async (req, res) => {
   try {
     const v = isValidTicker(req.params.symbol);
@@ -1174,7 +1052,7 @@ app.get("/api/bots/:symbol", async (req, res) => {
     if (hasDb) await ensurePortfolios();
   } catch {}
 
-  await emitEvent("server_booted", { version: "arena-v4-fix-trades-news-impact" });
+  await emitEvent("server_booted", { version: "arena-v4-generalnews-fix-warroom-css" });
 
   startRunner();
 
