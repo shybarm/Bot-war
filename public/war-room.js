@@ -20,7 +20,6 @@ function pushEventLine(text) {
   div.textContent = text;
   box.prepend(div);
 
-  // keep last 80
   while (box.children.length > 80) box.removeChild(box.lastChild);
 }
 
@@ -75,6 +74,17 @@ async function refreshWarRoom() {
 
   const t = await getJSON("/api/trades/recent?limit=25");
   renderTrades(t.items || []);
+
+  const r = await getJSON("/api/runner/status");
+  $("runnerInfo").innerHTML = `
+    <div><b>Enabled:</b> ${r.enabled ? "YES" : "NO"}</div>
+    <div><b>Interval:</b> ${r.intervalSec}s</div>
+    <div><b>Market:</b> ${r.market.open ? "OPEN" : "CLOSED"} (${r.market.reason})</div>
+    <div><b>News-only when closed:</b> ${r.newsOnlyWhenClosed ? "YES" : "NO"}</div>
+    <div><b>Universe:</b> ${r.universe.mode}${r.universe.mode==="custom" ? ` (${(r.universe.custom||[]).length})` : ""}</div>
+    <div><b>Last symbol:</b> ${r.state.lastSymbol || "—"}</div>
+    <div><b>Next symbol:</b> ${r.nextSymbol || "—"}</div>
+  `;
 }
 
 function connectWS() {
@@ -92,13 +102,15 @@ function connectWS() {
 
       if (msg.type === "carousel_tick") {
         $("carouselSymbol").textContent = msg.payload?.symbol || "—";
-        pushEventLine(`♻ Carousel: ${msg.payload?.symbol}`);
+        const m = msg.payload?.market;
+        pushEventLine(`♻ Carousel: ${msg.payload?.symbol} • Market: ${m?.open ? "OPEN" : "CLOSED"} (${m?.reason || ""})`);
       }
 
       if (msg.type === "bot_fight") {
         const sym = msg.payload?.symbol;
         const winner = msg.payload?.winner;
-        pushEventLine(`⚔️ Fight: ${sym} • winner=${winner}`);
+        const allowed = msg.payload?.tradesAllowed;
+        pushEventLine(`⚔️ Fight: ${sym} • winner=${winner} • trades=${allowed ? "YES" : "NO"}`);
         await refreshWarRoom();
       }
 
@@ -114,7 +126,5 @@ function connectWS() {
 (async function init() {
   await refreshWarRoom();
   connectWS();
-
-  // keep the page fresh even if no WS events
   setInterval(() => refreshWarRoom().catch(() => {}), 15000);
 })();
