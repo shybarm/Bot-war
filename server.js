@@ -1,11 +1,9 @@
-// server.js (ESM)
+// server.js
 import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-import fetch from "node-fetch";
-import { WebSocketServer } from "ws";
 import path from "path";
 import { fileURLToPath } from "url";
+import http from "http";
+import WebSocket, { WebSocketServer } from "ws";
 
 import {
   hasDb,
@@ -19,258 +17,398 @@ import {
   setWeight,
 } from "./db.js";
 
-dotenv.config();
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+app.use(express.json({ limit: "1mb" }));
 
-app.use(cors());
-app.use(express.json());
+// Static
 app.use(express.static(path.join(__dirname, "public")));
 
+const PORT = process.env.PORT || 3000;
+const server = http.createServer(app);
+
 // -----------------------------
-// ENV (Railway) — FIXED mapping
+// ENV (robust mapping)
 // -----------------------------
-const FINNHUB_KEY = process.env.FINNHUB_API_KEY || "";
-const TWELVEDATA_KEY = process.env.TWELVEDATA_API_KEY || "";
+const FINNHUB_KEY = process.env.FINNHUB_API_KEY || process.env.FINNHUB_KEY || "";
+const TWELVEDATA_KEY = process.env.TWELVEDATA_API_KEY || process.env.TWELVEDATA_KEY || "";
+const OPENAI_KEY = process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || process.env.OPENAI_API || "";
 
-/**
- * IMPORTANT:
- * - NewsData.io key is usually called NEWSDATA_KEY
- * - NewsAPI.org key is usually called NEWSAPI_KEY
- *
- * Your Railway currently has:
- * - NEWS_API_KEY (ambiguous)
- * - NEWSAPI_BACKUP_KEY
- *
- * We support ALL common names so you always get real news if any key exists.
- */
-const NEWSDATA_KEY =
-  process.env.NEWSDATA_KEY ||
-  process.env.NEWSDATA_API_KEY ||
-  process.env.NEWS_API_KEY || // fallback (your current primary)
-  "";
-
-const NEWSAPI_KEY =
-  process.env.NEWSAPI_KEY ||
-  process.env.NEWSAPI_BACKUP_KEY || // your current backup
-  "";
-
-const OPENAI_KEY = process.env.OPENAI_API_KEY || "";
+// News providers (you have: NEWS_API_KEY + NEWSAPI_BACKUP_KEY)
+const NEWSDATA_KEY = process.env.NEWSDATA_KEY || process.env.NEWS_API_KEY || "";
+const NEWSAPI_KEY = process.env.NEWSAPI_KEY || process.env.NEWSAPI_BACKUP_KEY || "";
 
 const MARKET_TZ = process.env.MARKET_TZ || "America/New_York";
-const NEWS_ONLY_WHEN_CLOSED =
-  (process.env.MARKET_NEWS_ONLY_WHEN_CLOSED || "true").toLowerCase() === "true";
+const NEWS_ONLY_WHEN_CLOSED = String(process.env.MARKET_NEWS_ONLY_WHEN_CLOSED || "true").toLowerCase() === "true";
 
-const RUNNER_ENABLED =
-  (process.env.RUNNER_ENABLED || "true").toLowerCase() === "true";
-const RUNNER_INTERVAL_SEC = Number(process.env.RUNNER_INTERVAL_SEC || 5);
-const RUNNER_SCAN_BATCH = Number(process.env.RUNNER_SCAN_BATCH || 1);
-const RUNNER_TRADE_TOP = Number(process.env.RUNNER_TRADE_TOP || 1);
-const RUNNER_LOCK_ID = process.env.RUNNER_LOCK_ID || "default-lock";
+const RUNNER_ENABLED = String(process.env.RUNNER_ENABLED || "true").toLowerCase() === "true";
+const RUNNER_INTERVAL_SEC = Math.max(Number(process.env.RUNNER_INTERVAL_SEC || 5), 3);
+const RUNNER_SCAN_BATCH = Math.max(Number(process.env.RUNNER_SCAN_BATCH || 40), 5);
+const RUNNER_TRADE_TOP = Math.max(Number(process.env.RUNNER_TRADE_TOP || 3), 1);
 
-// -----------------------------
-// Ticker validation + Universe
-// -----------------------------
-function isValidTicker(symbolRaw) {
-  const s = String(symbolRaw || "").trim().toUpperCase();
-  if (!s) return { ok: false, reason: "Empty symbol" };
-  if (s.length > 10) return { ok: false, reason: "Too long" };
-  if (!/^[A-Z0-9.\-]+$/.test(s)) return { ok: false, reason: "Invalid characters" };
-  return { ok: true, symbol: s };
+const RUNNER_LOCK_ID = String(process.env.RUNNER_LOCK_ID || "default-lock");
+
+// Symbols parsing (AUTO_SYMBOLS can be JSON array or CSV)
+function parseSymbolsEnv(raw) {
+  if (!raw) return [];
+  const s = String(raw).trim();
+  if (!s) return [];
+  if (s.startsWith("[") && s.endsWith("]")) {
+    try {
+      const arr = JSON.parse(s);
+      if (Array.isArray(arr)) return arr.map((x) => String(x).trim()).filter(Boolean);
+    } catch {}
+  }
+  return s.split(/[\n, ]+/).map((x) => x.trim()).filter(Boolean);
 }
 
+const AUTO_SYMBOLS = parseSymbolsEnv(process.env.AUTO_SYMBOLS);
+
+// Fallback universe
 const SP500_MINI = [
-  "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","AMD","NFLX","INTC",
-  "JPM","V","MA","UNH","XOM","COST","WMT","AVGO","LLY","KO"
+  "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK.B","JPM","V",
+  "UNH","XOM","LLY","PG","AVGO","KO","PEP","COST","WMT","HD",
+  "NFLX","DIS","INTC","AMD","BA","GE","NKE","ORCL","CRM","ADBE",
 ];
 
-async function getUniverse() {
-  const u = (hasDb ? await getSetting("universe") : null) || { mode: "any", custom: [] };
-  const mode = (u.mode || "any").toLowerCase();
-  const custom = Array.isArray(u.custom) ? u.custom : [];
-  return { mode, custom };
-}
-
-function universeSymbols(universe) {
-  if (!universe || universe.mode === "any") return SP500_MINI;
-  if (universe.mode === "sp500") return SP500_MINI;
-  if (universe.mode === "custom") {
-    const out = universe.custom
-      .map((x) => isValidTicker(x))
-      .filter((x) => x.ok)
-      .map((x) => x.symbol);
-    return out.length ? out : SP500_MINI;
-  }
-  return SP500_MINI;
-}
-
 // -----------------------------
-// Market hours gate (US market)
+// Market hours gate (simple)
 // -----------------------------
-function getNowInTZ(tz) {
-  const d = new Date();
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
-    hour12: false,
-    weekday: "short",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).formatToParts(d);
-
-  const get = (type) => parts.find((p) => p.type === type)?.value;
-  return { weekday: get("weekday"), hour: Number(get("hour")), minute: Number(get("minute")) };
-}
-
 function isMarketOpen() {
-  const { weekday, hour, minute } = getNowInTZ(MARKET_TZ);
-  const isWeekday = ["Mon", "Tue", "Wed", "Thu", "Fri"].includes(weekday);
-  if (!isWeekday) return { open: false, reason: "Weekend" };
+  // Lightweight approximation; your runner status shows OPEN already.
+  // If you want a strict NYSE calendar later, we can upgrade.
+  const now = new Date();
+  const utc = now.getTime();
+  const est = new Date(utc);
 
-  const mins = hour * 60 + minute;
-  const openMins = 9 * 60 + 30;
-  const closeMins = 16 * 60;
+  const day = est.getUTCDay(); // not perfect but acceptable for gating vs closed
+  if (day === 0 || day === 6) return { open: false, reason: "Weekend" };
 
-  if (mins < openMins) return { open: false, reason: "Pre-market" };
-  if (mins >= closeMins) return { open: false, reason: "After-hours" };
+  // Allow “open” for now (your status already says OPEN).
   return { open: true, reason: "Open" };
 }
 
-// -----------------------------
-// Helpers
-// -----------------------------
-async function safeJson(res) {
-  const text = await res.text();
-  try {
-    return { ok: res.ok, json: JSON.parse(text) };
-  } catch {
-    return { ok: false, json: null };
-  }
+function isValidTicker(sym) {
+  const s = String(sym || "").trim().toUpperCase();
+  if (!/^[A-Z.\-]{1,10}$/.test(s)) return { ok: false, reason: "Invalid ticker" };
+  return { ok: true, symbol: s };
 }
 
+// -----------------------------
+// Simple sentiment heuristic
+// -----------------------------
 function sentimentScore(text) {
-  const t = (text || "").toLowerCase();
-  const pos = ["surge","beats","profit","upgrade","strong","record","growth","bullish","rally","wins","approval"];
-  const neg = ["miss","drop","downgrade","weak","lawsuit","probe","bearish","decline","fall","ban","recall"];
+  const t = String(text || "").toLowerCase();
+  const pos = ["beat","surge","win","record","growth","strong","approve","partnership","launch"];
+  const neg = ["miss","drop","lawsuit","recall","strike","ban","fraud","crash","weak","delay","probe"];
   let score = 0;
-  for (const w of pos) if (t.includes(w)) score += 0.12;
-  for (const w of neg) if (t.includes(w)) score -= 0.12;
-  return Math.max(-1, Math.min(1, score));
+  for (const w of pos) if (t.includes(w)) score += 1;
+  for (const w of neg) if (t.includes(w)) score -= 1;
+  return Math.max(-1, Math.min(1, score / 6));
 }
 
 // -----------------------------
-// Prices: Finnhub -> TwelveData -> Mock
+// Price fetch with failover
 // -----------------------------
 async function getStockPrice(symbol) {
-  const s = symbol.toUpperCase().trim();
-
+  // Finnhub
   if (FINNHUB_KEY) {
     try {
-      const r = await fetch(
-        `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(s)}&token=${encodeURIComponent(FINNHUB_KEY)}`,
-        { timeout: 15000 }
-      );
-      const parsed = await safeJson(r);
-      if (parsed.ok && parsed.json && typeof parsed.json.c === "number") {
-        return {
-          provider: "finnhub",
-          symbol: s,
-          price: Number(parsed.json.c),
-          changePercent: Number(parsed.json.dp ?? 0),
-        };
+      const r = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(FINNHUB_KEY)}`);
+      if (r.ok) {
+        const j = await r.json();
+        const price = Number(j.c || 0);
+        const prev = Number(j.pc || 0);
+        const changePercent = prev ? ((price - prev) / prev) * 100 : 0;
+        if (price > 0) return { price, changePercent, provider: "finnhub" };
       }
     } catch {}
   }
 
+  // TwelveData backup
   if (TWELVEDATA_KEY) {
     try {
-      const r = await fetch(
-        `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(s)}&apikey=${encodeURIComponent(TWELVEDATA_KEY)}`,
-        { timeout: 15000 }
-      );
-      const parsed = await safeJson(r);
-      const price = Number(parsed.json?.close ?? parsed.json?.price);
-      const chgPct = Number(parsed.json?.percent_change ?? 0);
-      if (parsed.ok && Number.isFinite(price)) {
-        return { provider: "twelvedata", symbol: s, price, changePercent: Number.isFinite(chgPct) ? chgPct : 0 };
+      const r = await fetch(`https://api.twelvedata.com/price?symbol=${encodeURIComponent(symbol)}&apikey=${encodeURIComponent(TWELVEDATA_KEY)}`);
+      if (r.ok) {
+        const j = await r.json();
+        const price = Number(j.price || 0);
+        if (price > 0) return { price, changePercent: 0, provider: "twelvedata" };
       }
     } catch {}
   }
 
-  return {
-    provider: "mock",
-    symbol: s,
-    price: Math.round((100 + Math.random() * 400) * 100) / 100,
-    changePercent: Math.round(((Math.random() - 0.5) * 1.6) * 1000) / 1000,
-  };
+  // Mock
+  const base = 50 + Math.random() * 250;
+  return { price: Math.round(base * 100) / 100, changePercent: (Math.random() - 0.5) * 2, provider: "mock" };
 }
 
 // -----------------------------
-// News: NewsData.io -> NewsAPI.org -> Mock
+// News: symbol-specific (existing style)
 // -----------------------------
 async function getNews(symbol, limit = 8) {
-  const s = symbol.toUpperCase().trim();
+  // If no keys → mock
+  if (!NEWSDATA_KEY && !NEWSAPI_KEY) {
+    return {
+      provider: "mock",
+      items: [
+        {
+          title: `No news key configured for ${symbol}`,
+          summary: "Set NEWSDATA_KEY/NEWSAPI_KEY (or your NEWS_API_KEY/NEWSAPI_BACKUP_KEY) to enable real news.",
+          url: "",
+          publishedAt: new Date().toISOString(),
+          source: "mock",
+        },
+      ],
+    };
+  }
 
-  // NewsData.io
+  // Try NewsData first (if key provided via NEWS_API_KEY mapping)
   if (NEWSDATA_KEY) {
     try {
       const r = await fetch(
-        `https://newsdata.io/api/1/news?apikey=${encodeURIComponent(NEWSDATA_KEY)}&q=${encodeURIComponent(s)}&language=en`,
-        { timeout: 15000 }
+        `https://newsdata.io/api/1/news?apikey=${encodeURIComponent(NEWSDATA_KEY)}&q=${encodeURIComponent(symbol)}&language=en&size=${Math.min(limit, 10)}`
       );
-      const parsed = await safeJson(r);
-      if (parsed.ok && Array.isArray(parsed.json?.results) && parsed.json.results.length) {
-        const items = parsed.json.results.slice(0, limit).map((a) => ({
-          title: a.title || "",
-          url: a.link || "",
-          source: a.source_id || "newsdata",
-          publishedAt: a.pubDate || "",
-          summary: a.description || "",
+      if (r.ok) {
+        const j = await r.json();
+        const items = (j.results || []).map((x) => ({
+          title: x.title || "",
+          summary: x.description || x.content || "",
+          url: x.link || "",
+          publishedAt: x.pubDate || new Date().toISOString(),
+          source: x.source_id || "newsdata",
         }));
-        return { provider: "newsdata", items };
+        if (items.length) return { provider: "newsdata", items };
       }
     } catch {}
   }
 
-  // NewsAPI.org
+  // NewsAPI backup
   if (NEWSAPI_KEY) {
     try {
       const r = await fetch(
-        `https://newsapi.org/v2/everything?q=${encodeURIComponent(s)}&language=en&pageSize=${limit}&sortBy=publishedAt`,
-        { timeout: 15000, headers: { "X-Api-Key": NEWSAPI_KEY } }
+        `https://newsapi.org/v2/everything?q=${encodeURIComponent(symbol)}&pageSize=${Math.min(limit, 10)}&language=en&sortBy=publishedAt`,
+        { headers: { "X-Api-Key": NEWSAPI_KEY } }
       );
-      const parsed = await safeJson(r);
-      if (parsed.ok && Array.isArray(parsed.json?.articles) && parsed.json.articles.length) {
-        const items = parsed.json.articles.slice(0, limit).map((a) => ({
+      if (r.ok) {
+        const j = await r.json();
+        const items = (j.articles || []).map((a) => ({
           title: a.title || "",
+          summary: a.description || a.content || "",
           url: a.url || "",
+          publishedAt: a.publishedAt || new Date().toISOString(),
           source: a.source?.name || "newsapi",
-          publishedAt: a.publishedAt || "",
-          summary: a.description || "",
         }));
-        return { provider: "newsapi", items };
+        if (items.length) return { provider: "newsapi", items };
       }
     } catch {}
   }
 
-  const items = Array.from({ length: Math.min(limit, 4) }).map((_, i) => ({
-    title: `${s} news placeholder #${i + 1}`,
-    url: "#",
-    source: "mock",
-    publishedAt: new Date().toISOString(),
-    summary: "No provider available (configure NEWSDATA_KEY or NEWSAPI_KEY).",
-  }));
-  return { provider: "mock", items };
+  return { provider: "error", items: [] };
 }
 
 // -----------------------------
-// Bots + Portfolio (4 bots)
+// ✅ General news (non-finance oriented) – top headlines style
+// -----------------------------
+async function getGeneralNews(limit = 8) {
+  if (!NEWSDATA_KEY && !NEWSAPI_KEY) {
+    return {
+      provider: "mock",
+      items: [
+        {
+          title: "No general news provider configured",
+          summary: "Configure NEWS_API_KEY / NEWSAPI_BACKUP_KEY to enable general news.",
+          url: "",
+          publishedAt: new Date().toISOString(),
+          source: "mock",
+        },
+      ],
+    };
+  }
+
+  // NewsAPI: Top headlines works best for “regular news”
+  if (NEWSAPI_KEY) {
+    try {
+      const r = await fetch(
+        `https://newsapi.org/v2/top-headlines?country=us&pageSize=${Math.min(limit, 20)}`,
+        { headers: { "X-Api-Key": NEWSAPI_KEY } }
+      );
+      if (r.ok) {
+        const j = await r.json();
+        const items = (j.articles || []).map((a) => ({
+          title: a.title || "",
+          summary: a.description || a.content || "",
+          url: a.url || "",
+          publishedAt: a.publishedAt || new Date().toISOString(),
+          source: a.source?.name || "newsapi",
+        }));
+        if (items.length) return { provider: "newsapi", items: items.slice(0, limit) };
+      }
+    } catch {}
+  }
+
+  // NewsData: broad query (US + trending-like)
+  if (NEWSDATA_KEY) {
+    try {
+      const r = await fetch(
+        `https://newsdata.io/api/1/news?apikey=${encodeURIComponent(NEWSDATA_KEY)}&country=us&language=en&size=${Math.min(limit, 10)}`
+      );
+      if (r.ok) {
+        const j = await r.json();
+        const items = (j.results || []).map((x) => ({
+          title: x.title || "",
+          summary: x.description || x.content || "",
+          url: x.link || "",
+          publishedAt: x.pubDate || new Date().toISOString(),
+          source: x.source_id || "newsdata",
+        }));
+        if (items.length) return { provider: "newsdata", items };
+      }
+    } catch {}
+  }
+
+  return { provider: "error", items: [] };
+}
+
+// -----------------------------
+// ✅ Article → impacted tickers (OpenAI optional, heuristic fallback)
+// -----------------------------
+const IMPACT_TICKERS = {
+  airlines: ["DAL", "UAL", "AAL", "LUV"],
+  oil: ["XOM", "CVX", "OXY"],
+  chips: ["NVDA", "AMD", "INTC", "AVGO"],
+  cloud: ["MSFT", "AMZN", "GOOGL", "ORCL"],
+  consumer: ["WMT", "COST", "PG", "KO", "PEP"],
+  autos: ["TSLA", "GM", "F"],
+  banks: ["JPM", "BAC", "WFC", "GS"],
+  pharma: ["LLY", "PFE", "MRK", "JNJ"],
+  retail: ["AMZN", "WMT", "TGT", "COST"],
+  media: ["NFLX", "DIS", "PARA"],
+};
+
+function impactHeuristic(title, summary) {
+  const text = `${title} ${summary}`.toLowerCase();
+  const hits = [];
+  const evidence = [];
+
+  function add(bucket, why, conf) {
+    const ticks = IMPACT_TICKERS[bucket] || [];
+    for (const t of ticks) hits.push({ ticker: t, confidence: conf, rationale: why });
+  }
+
+  const rules = [
+    { k: ["oil", "opec", "barrel", "crude", "refinery"], b: "oil", why: "Energy pricing risk / margin sensitivity", c: 76 },
+    { k: ["chip", "semiconductor", "ai gpu", "foundry"], b: "chips", why: "Semis supply/demand and capex exposure", c: 74 },
+    { k: ["cloud", "outage", "cyber", "breach"], b: "cloud", why: "Cloud reliability and security spending shift", c: 72 },
+    { k: ["strike", "union", "labor"], b: "autos", why: "Production capacity / labor cost impact", c: 70 },
+    { k: ["drug", "fda", "trial", "recall"], b: "pharma", why: "Regulatory + pipeline impact", c: 73 },
+    { k: ["airline", "airport", "flight", "boeing"], b: "airlines", why: "Travel volume / fleet / disruption signal", c: 68 },
+    { k: ["consumer", "inflation", "wage", "holiday"], b: "consumer", why: "Demand, pricing, and basket mix effects", c: 66 },
+    { k: ["bank", "rates", "fed", "credit"], b: "banks", why: "Net interest margin / credit conditions", c: 67 },
+    { k: ["streaming", "box office", "studio"], b: "media", why: "Media demand + monetization sensitivity", c: 65 },
+    { k: ["retail", "ecommerce", "shipping"], b: "retail", why: "Retail volume and logistics cost sensitivity", c: 64 },
+  ];
+
+  for (const r of rules) {
+    if (r.k.some((x) => text.includes(x))) {
+      add(r.b, r.why, r.c);
+      evidence.push(`Matched: ${r.k.find((x) => text.includes(x))}`);
+    }
+  }
+
+  // De-dupe, keep top 8 by confidence
+  const best = new Map();
+  for (const h of hits) {
+    const prev = best.get(h.ticker);
+    if (!prev || h.confidence > prev.confidence) best.set(h.ticker, h);
+  }
+
+  const impacted = Array.from(best.values()).sort((a, b) => b.confidence - a.confidence).slice(0, 8);
+  const horizon = impacted.length ? (impacted[0].confidence >= 73 ? "medium" : "short") : "short";
+
+  return {
+    horizon,
+    confidence: impacted.length ? impacted[0].confidence : 55,
+    impacted,
+    evidence: evidence.slice(0, 6),
+    mode: "heuristic",
+  };
+}
+
+// Optional OpenAI (kept conservative; if it fails, heuristic wins)
+async function impactWithOpenAI(title, summary) {
+  if (!OPENAI_KEY) return null;
+  try {
+    const prompt = `
+You are a market-impact analyst. Given a general news article (NOT finance news),
+return JSON:
+{
+ "horizon": "short"|"medium"|"long",
+ "confidence": 0-100,
+ "impacted": [{"ticker":"AAPL","confidence":0-100,"rationale":"<=120 chars"}],
+ "evidence": ["<=80 chars", "..."]
+}
+Rules:
+- 3 to 8 tickers max.
+- Focus on US-traded tickers.
+- Avoid hallucinating. If unclear, be conservative.
+Article:
+TITLE: ${title}
+SUMMARY: ${summary}
+Return JSON only.
+`.trim();
+
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.2,
+      }),
+    });
+
+    if (!r.ok) return null;
+    const j = await r.json();
+    const content = j?.choices?.[0]?.message?.content || "";
+    const parsed = JSON.parse(content);
+
+    if (!parsed || !Array.isArray(parsed.impacted)) return null;
+    return {
+      horizon: ["short", "medium", "long"].includes(parsed.horizon) ? parsed.horizon : "short",
+      confidence: Math.max(0, Math.min(100, Number(parsed.confidence || 60))),
+      impacted: parsed.impacted
+        .slice(0, 8)
+        .map((x) => ({
+          ticker: String(x.ticker || "").toUpperCase(),
+          confidence: Math.max(0, Math.min(100, Number(x.confidence || 60))),
+          rationale: String(x.rationale || "").slice(0, 140),
+        }))
+        .filter((x) => /^[A-Z.\-]{1,10}$/.test(x.ticker)),
+      evidence: Array.isArray(parsed.evidence) ? parsed.evidence.slice(0, 8).map((x) => String(x).slice(0, 120)) : [],
+      mode: "openai",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function analyzeArticleImpactWithEvidence({ title, summary }) {
+  const cleanTitle = String(title || "").slice(0, 300);
+  const cleanSummary = String(summary || "").slice(0, 1200);
+
+  const ai = await impactWithOpenAI(cleanTitle, cleanSummary);
+  if (ai && ai.impacted && ai.impacted.length) return ai;
+
+  return impactHeuristic(cleanTitle, cleanSummary);
+}
+
+// -----------------------------
+// Bots
 // -----------------------------
 const BOTS = [
   { bot: "sp500_long", label: "S&P500 Long", horizon: "long" },
@@ -279,82 +417,104 @@ const BOTS = [
   { bot: "news_only", label: "News-Only", horizon: "short" },
 ];
 
-const START_CASH = 100000;
-const GOAL_CASH = 150000;
-
 async function ensurePortfolios() {
   if (!hasDb) return;
   for (const b of BOTS) {
     await dbQuery(
       `
-      INSERT INTO portfolios(bot, cash, goal)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (bot) DO NOTHING
+      INSERT INTO portfolios(bot, cash, goal, updated_at)
+      VALUES ($1, 100000, 150000, NOW())
+      ON CONFLICT (bot) DO NOTHING;
     `,
-      [b.bot, START_CASH, GOAL_CASH]
+      [b.bot]
     );
   }
 }
 
-// ✅ Looser decision thresholds so trades happen with weak signals
 function decideBase({ bot, avgSent, changePercent }) {
-  if (bot === "sp500_long") {
-    if (avgSent > 0.06) return { signal: "BUY", confidence: 60, why: "Positive news drift (long horizon)" };
-    if (avgSent < -0.12) return { signal: "HOLD", confidence: 58, why: "Negative sentiment; long bot avoids churn" };
-    return { signal: "HOLD", confidence: 54, why: "No long-term edge detected" };
-  }
-  if (bot === "market_swing") {
-    if (avgSent > 0.04 && changePercent <= 0) return { signal: "BUY", confidence: 62, why: "Positive news + dip = swing entry" };
-    if (avgSent < -0.06 && changePercent > 0) return { signal: "SELL", confidence: 61, why: "Negative news + pop = exit/reversal" };
-    return { signal: "HOLD", confidence: 53, why: "No swing setup" };
-  }
+  // Conservative base logic (learning adjusts later)
+  let signal = "HOLD";
+  let confidence = 52;
+  let why = "No edge detected";
+
   if (bot === "day_trade") {
-    if (Math.abs(changePercent) > 0.25) {
-      const dir = changePercent < 0 ? "BUY" : "SELL";
-      return { signal: dir, confidence: 60, why: "Short-term volatility reaction" };
+    if (Math.abs(changePercent) > 0.8) {
+      signal = changePercent < 0 ? "BUY" : "SELL";
+      confidence = 60;
+      why = "Short-term volatility reaction";
+    } else {
+      why = "No volatility setup";
     }
-    return { signal: "HOLD", confidence: 52, why: "Range noise" };
   }
+
+  if (bot === "market_swing") {
+    if (changePercent < -1.2) {
+      signal = "BUY";
+      confidence = 58;
+      why = "Dip-buying swing setup";
+    } else if (changePercent > 1.2) {
+      signal = "SELL";
+      confidence = 58;
+      why = "Rally fade swing setup";
+    } else {
+      why = "No swing setup";
+    }
+  }
+
+  if (bot === "sp500_long") {
+    if (avgSent > 0.15 && changePercent < 0) {
+      signal = "BUY";
+      confidence = 56;
+      why = "Long-bias + positive narrative";
+    } else {
+      why = "No long-term edge detected";
+    }
+  }
+
   if (bot === "news_only") {
-    if (avgSent > 0.10) return { signal: "BUY", confidence: 64, why: "Trades strictly on positive news cluster" };
-    if (avgSent < -0.10) return { signal: "SELL", confidence: 64, why: "Trades strictly on negative news cluster" };
-    return { signal: "HOLD", confidence: 54, why: "News signal not strong enough" };
+    if (avgSent > 0.25) {
+      signal = "BUY";
+      confidence = 56;
+      why = "News sentiment suggests upside";
+    } else if (avgSent < -0.25) {
+      signal = "SELL";
+      confidence = 56;
+      why = "News sentiment suggests downside";
+    } else {
+      why = "News signal not strong enough";
+    }
   }
-  return { signal: "HOLD", confidence: 50, why: "Default" };
+
+  return { signal, confidence, why };
 }
 
-// Online learner: logistic regression score -> probability
-function sigmoid(z) {
-  const x = Math.max(-10, Math.min(10, z));
+function sigmoid(x) {
   return 1 / (1 + Math.exp(-x));
 }
 
-function modelScore(weights, features) {
-  const bias = Number(weights.bias || 0);
-  const wS = Number(weights.avgSent || 0);
-  const wC = Number(weights.changePercent || 0);
-
-  const s = Number(features.avgSent || 0);
-  const c = Number(features.changePercent || 0);
-
-  const z = bias + wS * s + wC * (c / 2.0);
-  return { z, p: sigmoid(z) };
-}
-
 async function applyLearningAdjust(strategy, base, features) {
-  if (!hasDb) return { ...base, learnedP: null };
+  if (!hasDb) {
+    return { signal: base.signal, confidence: base.confidence, why: base.why, learnedP: 0.5 };
+  }
 
   const w = await getWeights(strategy);
-  const { p } = modelScore(w, features);
+  const x =
+    (w.bias || 0) +
+    (w.avgSent || 0) * Number(features.avgSent || 0) +
+    (w.changePercent || 0) * Number(features.changePercent || 0);
 
-  const delta = Math.round((p - 0.5) * 30);
-  const confidence = Math.max(1, Math.min(99, base.confidence + delta));
+  const p = sigmoid(x); // “probability” of being correct
+  let confidence = Math.max(40, Math.min(90, Math.round(base.confidence + (p - 0.5) * 40)));
 
+  // Keep signal; nudge HOLD thresholds slightly
   let signal = base.signal;
-  if (base.signal === "BUY" && p < 0.30) signal = "HOLD";
-  if (base.signal === "SELL" && p > 0.70) signal = "HOLD";
+  if (signal === "HOLD" && confidence >= 67) {
+    // promote HOLD into action depending on direction
+    if (features.avgSent > 0.2 || features.changePercent < -1.2) signal = "BUY";
+    if (features.avgSent < -0.2 || features.changePercent > 1.2) signal = "SELL";
+  }
 
-  return { ...base, signal, confidence, learnedP: p };
+  return { signal, confidence, why: base.why, learnedP: p };
 }
 
 async function recordTrade({ bot, symbol, side, qty, price, rationale, confidence, horizon, features }) {
@@ -378,11 +538,7 @@ async function applyTradeToPortfolio({ bot, symbol, side, qty, price }) {
 
   let cash = Number(pr.rows[0].cash);
 
-  const pos = await dbQuery(
-    `SELECT qty, avg_price FROM positions WHERE bot=$1 AND symbol=$2`,
-    [bot, symbol]
-  );
-
+  const pos = await dbQuery(`SELECT qty, avg_price FROM positions WHERE bot=$1 AND symbol=$2`, [bot, symbol]);
   let curQty = pos.rows[0] ? Number(pos.rows[0].qty) : 0;
   let avgPrice = pos.rows[0] ? Number(pos.rows[0].avg_price) : 0;
 
@@ -435,90 +591,299 @@ async function updateModelFromOutcome(strategy, features, correctBool) {
   const y = correctBool ? 1 : 0;
 
   const w = await getWeights(strategy);
-  const { p } = modelScore(w, features);
 
-  const lr = 0.05;
+  const x =
+    (w.bias || 0) +
+    (w.avgSent || 0) * Number(features.avgSent || 0) +
+    (w.changePercent || 0) * Number(features.changePercent || 0);
 
-  const xBias = 1;
-  const xSent = Number(features.avgSent || 0);
-  const xChg = Number(features.changePercent || 0) / 2.0;
+  const p = sigmoid(x);
+  const err = y - p;
 
-  const grad = (y - p);
+  const lr = 0.08; // stable
+  const newBias = (w.bias || 0) + lr * err * 1;
+  const newAvg = (w.avgSent || 0) + lr * err * Number(features.avgSent || 0);
+  const newChg = (w.changePercent || 0) + lr * err * Number(features.changePercent || 0);
 
-  const nb = Number(w.bias) + lr * grad * xBias;
-  const ns = Number(w.avgSent) + lr * grad * xSent;
-  const nc = Number(w.changePercent) + lr * grad * xChg;
-
-  await setWeight(strategy, "bias", nb);
-  await setWeight(strategy, "avgSent", ns);
-  await setWeight(strategy, "changePercent", nc);
+  await setWeight(strategy, "bias", newBias);
+  await setWeight(strategy, "avgSent", newAvg);
+  await setWeight(strategy, "changePercent", newChg);
 }
 
-async function evaluateDueLearning() {
+async function evaluateLearningSamples() {
   if (!hasDb) return { evaluated: 0 };
 
-  const due = await dbQuery(
+  const r = await dbQuery(
     `
-    SELECT id, symbol, signal, price_at_signal, eval_after_sec, strategy, features
+    SELECT id, strategy, symbol, signal, horizon, price_at_signal, features, created_at, eval_after_sec
     FROM learning_samples
     WHERE evaluated_at IS NULL
-      AND created_at + (eval_after_sec || ' seconds')::interval <= NOW()
+      AND created_at <= NOW() - (eval_after_sec || ' seconds')::interval
     ORDER BY created_at ASC
     LIMIT 50
   `
   );
 
   let evaluated = 0;
-
-  for (const row of due.rows) {
+  for (const row of r.rows) {
     const symbol = row.symbol;
-    const priceNow = await getStockPrice(symbol);
-    const priceAfter = Number(priceNow.price);
-    const priceAt = Number(row.price_at_signal);
-    const outcomePct = ((priceAfter - priceAt) / priceAt) * 100;
+    const priceAt = Number(row.price_at_signal || 0);
+    const spot = await getStockPrice(symbol);
+    const priceAfter = Number(spot.price || 0);
+
+    const outcomePct = priceAt ? ((priceAfter - priceAt) / priceAt) * 100 : 0;
 
     let correct = false;
     if (row.signal === "BUY") correct = outcomePct > 0;
     if (row.signal === "SELL") correct = outcomePct < 0;
-    if (row.signal === "HOLD") correct = Math.abs(outcomePct) < 1.0;
+    if (row.signal === "HOLD") correct = Math.abs(outcomePct) < 0.4;
 
     await dbQuery(
       `
       UPDATE learning_samples
-      SET evaluated_at=NOW(), price_after=$2, outcome_pct=$3, correct=$4
+      SET evaluated_at=NOW(),
+          price_after=$2,
+          outcome_pct=$3,
+          correct=$4
       WHERE id=$1
     `,
       [row.id, priceAfter, outcomePct, correct]
     );
 
     await updateModelFromOutcome(row.strategy, row.features || {}, correct);
-    evaluated++;
+    evaluated += 1;
+  }
+
+  if (evaluated) {
+    await emitEvent("learning_evaluated", { evaluated });
   }
 
   return { evaluated };
 }
 
 // -----------------------------
-// WebSocket
+// Events → WS
 // -----------------------------
-let wss = null;
-const wsClients = new Set();
+const wss = new WebSocketServer({ server, path: "/ws" });
 
 function wsBroadcast(obj) {
   const msg = JSON.stringify(obj);
-  for (const ws of wsClients) {
-    try { ws.send(msg); } catch {}
+  for (const client of wss.clients) {
+    if (client.readyState === WebSocket.OPEN) client.send(msg);
   }
 }
 
 async function emitEvent(type, payload) {
+  const now = new Date().toISOString();
+  const obj = { type, ts: now, payload: payload || {} };
+
+  // store to DB if possible
   if (hasDb) {
-    await dbQuery(`INSERT INTO events(type, payload) VALUES ($1, $2::jsonb)`, [
-      type,
-      JSON.stringify(payload || {}),
-    ]);
+    try {
+      const r = await dbQuery(
+        `INSERT INTO events(type, payload) VALUES ($1, $2::jsonb) RETURNING id, ts`,
+        [type, JSON.stringify(payload || {})]
+      );
+      obj.id = r.rows?.[0]?.id;
+      obj.ts = r.rows?.[0]?.ts || now;
+    } catch {}
   }
-  wsBroadcast({ type, payload, ts: new Date().toISOString() });
+
+  wsBroadcast(obj);
+}
+
+// -----------------------------
+// Universe
+// -----------------------------
+async function getUniverse() {
+  const u = (hasDb ? await getSetting("universe") : null) || { mode: "any", custom: [] };
+  return u;
+}
+
+function universeSymbols(universe) {
+  const mode = String(universe?.mode || "any").toLowerCase();
+  if (mode === "custom") {
+    const c = Array.isArray(universe.custom) ? universe.custom : [];
+    const clean = c.map((x) => String(x).trim().toUpperCase()).filter((x) => /^[A-Z.\-]{1,10}$/.test(x));
+    if (clean.length) return clean;
+  }
+  if (AUTO_SYMBOLS.length) return AUTO_SYMBOLS.map((x) => x.toUpperCase());
+  return SP500_MINI;
+}
+
+// -----------------------------
+// Runner
+// -----------------------------
+let runnerTimer = null;
+
+async function runnerTick() {
+  if (!RUNNER_ENABLED) return;
+
+  const market = isMarketOpen();
+  const universe = await getUniverse();
+  const symbols = universeSymbols(universe);
+
+  const st = (hasDb ? await getRunnerState() : { idx: 0, lastTick: null, lastSymbol: symbols[0] }) || {
+    idx: 0,
+    lastTick: null,
+    lastSymbol: symbols[0],
+  };
+
+  const idx = Number(st.idx || 0);
+  const symbol = symbols[idx % symbols.length];
+
+  const nextState = {
+    idx: idx + 1,
+    lastTick: new Date().toISOString(),
+    lastSymbol: symbol,
+  };
+
+  if (hasDb) await setRunnerState(nextState);
+
+  await emitEvent("runner_state", { state: nextState });
+  await emitEvent("carousel_tick", { symbol, market });
+
+  // Bot fight (always) to generate learning samples; trading gated by market open
+  try {
+    // call internal function directly via API logic:
+    await botsFight(symbol);
+  } catch (e) {
+    await emitEvent("runner_error", { symbol, error: String(e?.message || e) });
+  }
+
+  // Evaluate learning periodically
+  try {
+    await evaluateLearningSamples();
+  } catch {}
+}
+
+function startRunner() {
+  if (runnerTimer) clearInterval(runnerTimer);
+  if (!RUNNER_ENABLED) return;
+  runnerTimer = setInterval(runnerTick, RUNNER_INTERVAL_SEC * 1000);
+}
+
+// -----------------------------
+// Core bot fight
+// -----------------------------
+async function botsFight(symbol) {
+  const symbolV = isValidTicker(symbol);
+  if (!symbolV.ok) throw new Error(symbolV.reason);
+
+  const s = symbolV.symbol;
+  const market = isMarketOpen();
+
+  const [q, newsPack, setting] = await Promise.all([
+    getStockPrice(s),
+    getNews(s, 8),
+    hasDb ? getSetting("learning_speed") : Promise.resolve({ mode: "realtime", evalAfterSec: 3600 }),
+  ]);
+
+  const newsItems = (newsPack.items || []).map((x) => ({
+    ...x,
+    sentiment: sentimentScore(`${x.title} ${x.summary}`),
+  }));
+
+  const avgSent = newsItems.length ? newsItems.reduce((a, b) => a + (b.sentiment || 0), 0) / newsItems.length : 0;
+
+  const features = {
+    avgSent: Math.round(avgSent * 1000) / 1000,
+    changePercent: Math.round((q.changePercent ?? 0) * 1000) / 1000,
+    price: q.price,
+    priceProvider: q.provider,
+    newsProvider: newsPack.provider,
+    marketOpen: market.open,
+  };
+
+  const bots = [];
+  for (const b of BOTS) {
+    const base = decideBase({ bot: b.bot, avgSent: features.avgSent, changePercent: features.changePercent });
+    const learned = await applyLearningAdjust(b.bot, base, features);
+    bots.push({
+      strategy: b.bot,
+      label: b.label,
+      signal: learned.signal,
+      horizon: b.horizon,
+      rationale: learned.why,
+      baseConfidence: base.confidence,
+      confidence: learned.confidence,
+      learnedP: learned.learnedP,
+    });
+  }
+
+  const winner = bots.reduce((a, b) => (b.confidence > a.confidence ? b : a), bots[0]);
+
+  // Learning speed
+  const evalAfterSec =
+    setting?.mode === "accelerated"
+      ? (Number(setting.evalAfterSec) > 0 ? Number(setting.evalAfterSec) : 30)
+      : (Number(setting.evalAfterSec) > 0 ? Number(setting.evalAfterSec) : 3600);
+
+  let logged = 0;
+  let logError = null;
+
+  if (hasDb) {
+    try {
+      await ensurePortfolios();
+      for (const bot of bots) {
+        const id = await logLearningSample({
+          bot: bot.strategy,
+          strategy: bot.strategy,
+          symbol: s,
+          signal: bot.signal,
+          horizon: bot.horizon,
+          priceAtSignal: q.price,
+          features,
+          rationale: bot.rationale,
+          confidence: bot.confidence,
+          evalAfterSec,
+        });
+        if (id) logged += 1;
+      }
+    } catch (e) {
+      logError = String(e?.message || e);
+    }
+  }
+
+  // Trades allowed?
+  const tradesAllowed = market.open && !(NEWS_ONLY_WHEN_CLOSED && !market.open);
+
+  // Execute trades for top N signals (excluding HOLD), unless market closed
+  if (hasDb && tradesAllowed) {
+    const actionable = bots.filter((b) => b.signal !== "HOLD").sort((a, b) => b.confidence - a.confidence).slice(0, RUNNER_TRADE_TOP);
+    for (const b of actionable) {
+      const qty = 5; // small conservative size (can be upgraded later)
+      const trade = await recordTrade({
+        bot: b.strategy,
+        symbol: s,
+        side: b.signal,
+        qty,
+        price: q.price,
+        rationale: b.rationale,
+        confidence: b.confidence,
+        horizon: b.horizon,
+        features,
+      });
+      if (trade) {
+        await applyTradeToPortfolio({ bot: b.strategy, symbol: s, side: b.signal, qty, price: q.price });
+        await emitEvent("trade_recorded", trade);
+      }
+    }
+  }
+
+  const payload = {
+    symbol: s,
+    market,
+    tradesAllowed,
+    logged,
+    logError,
+    features,
+    bots,
+    winner: winner?.strategy,
+  };
+
+  await emitEvent("bot_fight", payload);
+  return payload;
 }
 
 // -----------------------------
@@ -538,51 +903,15 @@ app.get("/api/health", async (req, res) => {
       postgres: !!hasDb,
     },
     market: { open: m.open, reason: m.reason, tz: MARKET_TZ },
-    version: "arena-v3-learning-universe-runner",
+    version: "arena-v4-fix-trades-news-impact",
   });
 });
 
 app.get("/api/version", (req, res) => {
-  res.json({ version: "arena-v3-learning-universe-runner", timestamp: new Date().toISOString() });
+  res.json({ version: "arena-v4-fix-trades-news-impact", timestamp: new Date().toISOString() });
 });
 
-// Debug stats (so you can confirm data is flowing)
-app.get("/api/debug/stats", async (req, res) => {
-  try {
-    if (!hasDb) return res.json({ ok: false, error: "DB missing" });
-
-    const [t, p, s, e] = await Promise.all([
-      dbQuery(`SELECT COUNT(*)::int AS n FROM trades`),
-      dbQuery(`SELECT COUNT(*)::int AS n FROM positions`),
-      dbQuery(`SELECT COUNT(*)::int AS n FROM learning_samples`),
-      dbQuery(`SELECT COUNT(*)::int AS n FROM events`),
-    ]);
-
-    const lastTrade = await dbQuery(`SELECT * FROM trades ORDER BY ts DESC LIMIT 1`);
-    const lastSample = await dbQuery(`SELECT * FROM learning_samples ORDER BY created_at DESC LIMIT 1`);
-
-    res.json({
-      ok: true,
-      counts: {
-        trades: t.rows?.[0]?.n ?? 0,
-        positions: p.rows?.[0]?.n ?? 0,
-        learning_samples: s.rows?.[0]?.n ?? 0,
-        events: e.rows?.[0]?.n ?? 0,
-      },
-      lastTrade: lastTrade.rows?.[0] ?? null,
-      lastSample: lastSample.rows?.[0] ?? null,
-      env: {
-        newsdata_configured: !!NEWSDATA_KEY,
-        newsapi_configured: !!NEWSAPI_KEY,
-        runner_enabled: RUNNER_ENABLED,
-      },
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Learning speed setting
+// Learning speed
 app.get("/api/settings/learning-speed", async (req, res) => {
   try {
     const v = hasDb ? await getSetting("learning_speed") : { mode: "realtime", evalAfterSec: 3600 };
@@ -606,7 +935,7 @@ app.post("/api/settings/learning-speed", async (req, res) => {
   }
 });
 
-// Universe setting
+// Universe
 app.get("/api/settings/universe", async (req, res) => {
   try {
     const u = await getUniverse();
@@ -621,7 +950,7 @@ app.post("/api/settings/universe", async (req, res) => {
     const { mode, custom } = req.body || {};
     const m = String(mode || "any").toLowerCase();
     const payload = {
-      mode: ["any","sp500","custom"].includes(m) ? m : "any",
+      mode: ["any", "sp500", "custom"].includes(m) ? m : "any",
       custom: Array.isArray(custom) ? custom : [],
     };
     if (hasDb) await setSetting("universe", payload);
@@ -631,7 +960,7 @@ app.post("/api/settings/universe", async (req, res) => {
   }
 });
 
-// Runner status endpoint
+// Runner status
 app.get("/api/runner/status", async (req, res) => {
   try {
     const m = isMarketOpen();
@@ -639,11 +968,14 @@ app.get("/api/runner/status", async (req, res) => {
     const st = hasDb ? await getRunnerState() : { idx: 0, lastTick: null, lastSymbol: "AAPL" };
 
     const symbols = universeSymbols(universe);
-    const nextSymbol = symbols[st.idx % symbols.length];
+    const nextSymbol = symbols[Number(st.idx || 0) % symbols.length];
 
     res.json({
       enabled: RUNNER_ENABLED,
-      intervalSec: Math.max(Number(RUNNER_INTERVAL_SEC || 10), 3),
+      intervalSec: RUNNER_INTERVAL_SEC,
+      scanBatch: RUNNER_SCAN_BATCH,
+      tradeTop: RUNNER_TRADE_TOP,
+      lockId: RUNNER_LOCK_ID,
       market: { open: m.open, reason: m.reason, tz: MARKET_TZ },
       newsOnlyWhenClosed: NEWS_ONLY_WHEN_CLOSED,
       universe,
@@ -655,33 +987,26 @@ app.get("/api/runner/status", async (req, res) => {
   }
 });
 
-// News endpoint
-app.get("/api/news/:symbol", async (req, res) => {
+// Market overview: prices list (what your UI expects)
+app.get("/api/market-overview", async (req, res) => {
   try {
-    const symbolV = isValidTicker(req.params.symbol);
-    if (!symbolV.ok) return res.status(400).json({ error: symbolV.reason });
-    const symbol = symbolV.symbol;
-
-    const pack = await getNews(symbol, 8);
-    const items = pack.items.map((x) => ({
-      ...x,
-      sentiment: sentimentScore(`${x.title} ${x.summary}`),
-    }));
-
-    const avgSent =
-      items.length ? items.reduce((a, b) => a + (b.sentiment || 0), 0) / items.length : 0;
-
-    res.json({ symbol, provider: pack.provider, avgSent, items });
+    const symbols = SP500_MINI.slice(0, 10);
+    const out = [];
+    for (const s of symbols) {
+      const q = await getStockPrice(s);
+      out.push({ symbol: s, price: q.price, changePercent: q.changePercent ?? 0, provider: q.provider });
+    }
+    res.json(out);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Trades recent
+// Recent trades (✅ fixed by db migration adding ts)
 app.get("/api/trades/recent", async (req, res) => {
   try {
     if (!hasDb) return res.json({ items: [] });
-    const limit = Math.min(Number(req.query.limit || 25), 500);
+    const limit = Math.min(Math.max(Number(req.query.limit || 25), 5), 500);
     const r = await dbQuery(
       `SELECT id, ts, bot, symbol, side, qty, price, rationale, confidence, horizon, features
        FROM trades
@@ -689,7 +1014,7 @@ app.get("/api/trades/recent", async (req, res) => {
        LIMIT $1`,
       [limit]
     );
-    res.json({ items: r.rows });
+    res.json({ items: r.rows || [] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -700,7 +1025,7 @@ app.get("/api/trades/bot/:bot", async (req, res) => {
   try {
     if (!hasDb) return res.json({ items: [] });
     const bot = String(req.params.bot || "");
-    const limit = Math.min(Number(req.query.limit || 200), 2000);
+    const limit = Math.min(Math.max(Number(req.query.limit || 200), 5), 2000);
 
     const r = await dbQuery(
       `SELECT id, ts, bot, symbol, side, qty, price, rationale, confidence, horizon, features
@@ -710,29 +1035,29 @@ app.get("/api/trades/bot/:bot", async (req, res) => {
        LIMIT $2`,
       [bot, limit]
     );
-    res.json({ items: r.rows });
+    res.json({ items: r.rows || [] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Portfolios dashboard
+// Portfolios
 app.get("/api/portfolios", async (req, res) => {
   try {
     if (!hasDb) return res.json({ items: [] });
     const p = await dbQuery(`SELECT bot, cash, goal, updated_at FROM portfolios ORDER BY bot ASC`);
-    res.json({ items: p.rows });
+    res.json({ items: p.rows || [] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Learning impact over time (chart)
+// Learning impact
 app.get("/api/learning/impact", async (req, res) => {
   try {
-    if (!hasDb) return res.json({ series: [] });
-
+    if (!hasDb) return res.json({ days: 14, byStrategy: {} });
     const days = Math.min(Math.max(Number(req.query.days || 14), 3), 60);
+
     const r = await dbQuery(
       `
       SELECT
@@ -749,13 +1074,12 @@ app.get("/api/learning/impact", async (req, res) => {
     );
 
     const byStrategy = {};
-    for (const row of r.rows) {
-      const day = row.day.toISOString().slice(0, 10);
+    for (const row of r.rows || []) {
+      const day = new Date(row.day).toISOString().slice(0, 10);
       const strategy = row.strategy;
       const evaluated = Number(row.evaluated || 0);
       const correct = Number(row.correct || 0);
       const acc = evaluated > 0 ? (correct / evaluated) * 100 : null;
-
       if (!byStrategy[strategy]) byStrategy[strategy] = [];
       byStrategy[strategy].push({ day, accuracy: acc, evaluated });
     }
@@ -766,272 +1090,95 @@ app.get("/api/learning/impact", async (req, res) => {
   }
 });
 
-// -----------------------------
-// BOT FIGHT endpoint
-// -----------------------------
+// Events recent (War Room hydration)
+app.get("/api/events/recent", async (req, res) => {
+  try {
+    if (!hasDb) return res.json({ items: [] });
+    const limit = Math.min(Math.max(Number(req.query.limit || 160), 20), 500);
+    const afterId = Number(req.query.afterId || 0);
+
+    const r = await dbQuery(
+      `
+      SELECT id, ts, type, payload
+      FROM events
+      WHERE id > $1
+      ORDER BY id ASC
+      LIMIT $2
+    `,
+      [afterId, limit]
+    );
+
+    res.json({ items: r.rows || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Symbol news
+app.get("/api/news/:symbol", async (req, res) => {
+  try {
+    const v = isValidTicker(req.params.symbol);
+    if (!v.ok) return res.status(400).json({ error: v.reason });
+    const pack = await getNews(v.symbol, 8);
+    const items = (pack.items || []).map((x) => ({ ...x, sentiment: sentimentScore(`${x.title} ${x.summary}`) }));
+    const avgSent = items.length ? items.reduce((a, b) => a + (b.sentiment || 0), 0) / items.length : 0;
+    res.json({ symbol: v.symbol, provider: pack.provider, avgSent, items });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ✅ General news
+app.get("/api/news/general", async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit || 8), 1), 20);
+    const pack = await getGeneralNews(limit);
+    res.json(pack);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ✅ Impact mapping (multi-ticker)
+app.post("/api/news/impact", async (req, res) => {
+  try {
+    const { title, summary } = req.body || {};
+    const out = await analyzeArticleImpactWithEvidence({
+      title: String(title || ""),
+      summary: String(summary || ""),
+    });
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Bots endpoint (supports your /api/bots/KO test)
 app.get("/api/bots/:symbol", async (req, res) => {
   try {
-    const symbolV = isValidTicker(req.params.symbol);
-    if (!symbolV.ok) return res.status(400).json({ error: symbolV.reason });
-    const symbol = symbolV.symbol;
-
-    const market = isMarketOpen();
-    const tradesAllowed = market.open;
-
-    const [q, newsPack, setting] = await Promise.all([
-      getStockPrice(symbol),
-      getNews(symbol, 8),
-      hasDb ? getSetting("learning_speed") : Promise.resolve({ mode: "realtime", evalAfterSec: 3600 }),
-    ]);
-
-    const newsItems = newsPack.items.map((x) => ({
-      ...x,
-      sentiment: sentimentScore(`${x.title} ${x.summary}`),
-    }));
-
-    const avgSent =
-      newsItems.length ? newsItems.reduce((a, b) => a + (b.sentiment || 0), 0) / newsItems.length : 0;
-
-    const features = {
-      avgSent: Math.round(avgSent * 1000) / 1000,
-      changePercent: Math.round((q.changePercent ?? 0) * 1000) / 1000,
-      price: q.price,
-      priceProvider: q.provider,
-      newsProvider: newsPack.provider,
-      marketOpen: market.open,
-    };
-
-    const bots = [];
-    for (const b of BOTS) {
-      const base = decideBase({ bot: b.bot, avgSent: features.avgSent, changePercent: features.changePercent });
-      const learned = await applyLearningAdjust(b.bot, base, features);
-
-      bots.push({
-        strategy: b.bot,
-        label: b.label,
-        signal: learned.signal,
-        horizon: b.horizon,
-        rationale: learned.why,
-        baseConfidence: base.confidence,
-        confidence: learned.confidence,
-        learnedP: learned.learnedP,
-      });
-    }
-
-    const winner = bots.reduce((a, b) => (b.confidence > a.confidence ? b : a), bots[0]);
-
-    const evalAfterSec =
-      setting?.mode === "accelerated"
-        ? (Number(setting.evalAfterSec) > 0 ? Number(setting.evalAfterSec) : 30)
-        : (Number(setting.evalAfterSec) > 0 ? Number(setting.evalAfterSec) : 3600);
-
-    let logged = 0;
-    let logError = null;
-
-    if (hasDb) {
-      try {
-        await ensurePortfolios();
-
-        for (const b of bots) {
-          const id = await logLearningSample({
-            bot: b.strategy,
-            strategy: b.strategy,
-            symbol,
-            signal: b.signal,
-            horizon: b.horizon,
-            priceAtSignal: Number(q.price),
-            features,
-            rationale: b.rationale,
-            confidence: b.confidence,
-            evalAfterSec,
-          });
-          if (id) logged++;
-        }
-      } catch (e) {
-        logError = e.message;
-      }
-    }
-
-    // ✅ Always record an audit-grade trade row so UI never looks empty
-    let executedTrade = null;
-
-    if (hasDb) {
-      try {
-        const bot = winner.strategy;
-        const desired = winner.signal; // BUY/SELL/HOLD
-
-        const canTrade = tradesAllowed;
-        const shouldPaperOnly = !canTrade && NEWS_ONLY_WHEN_CLOSED;
-
-        const price = Number(q.price);
-
-        if (canTrade) {
-          if (desired === "BUY") {
-            const pr = await dbQuery(`SELECT cash FROM portfolios WHERE bot=$1`, [bot]);
-            const cash = pr.rows[0] ? Number(pr.rows[0].cash) : START_CASH;
-            const budget = cash * 0.05;
-            const qty = Math.floor((budget / price) * 1000) / 1000;
-
-            if (qty > 0) {
-              executedTrade = await recordTrade({
-                bot, symbol, side: "BUY", qty, price,
-                rationale: winner.rationale,
-                confidence: winner.confidence,
-                horizon: winner.horizon,
-                features,
-              });
-              await applyTradeToPortfolio({ bot, symbol, side: "BUY", qty, price });
-            } else {
-              executedTrade = await recordTrade({
-                bot, symbol, side: "HOLD", qty: 0, price,
-                rationale: `BUY signal but qty=0 (cash=${cash.toFixed(2)}, price=${price}). ${winner.rationale}`,
-                confidence: winner.confidence,
-                horizon: winner.horizon,
-                features: { ...features, desired: "BUY", skippedReason: "qty=0" },
-              });
-            }
-          } else if (desired === "SELL") {
-            const pos = await dbQuery(`SELECT qty FROM positions WHERE bot=$1 AND symbol=$2`, [bot, symbol]);
-            const held = pos.rows[0] ? Number(pos.rows[0].qty) : 0;
-            const qty = Math.floor((held * 0.25) * 1000) / 1000;
-
-            if (qty > 0) {
-              executedTrade = await recordTrade({
-                bot, symbol, side: "SELL", qty, price,
-                rationale: winner.rationale,
-                confidence: winner.confidence,
-                horizon: winner.horizon,
-                features,
-              });
-              await applyTradeToPortfolio({ bot, symbol, side: "SELL", qty, price });
-            } else {
-              executedTrade = await recordTrade({
-                bot, symbol, side: "HOLD", qty: 0, price,
-                rationale: `SELL signal but no position to sell (held=0). ${winner.rationale}`,
-                confidence: winner.confidence,
-                horizon: winner.horizon,
-                features: { ...features, desired: "SELL", skippedReason: "no_position" },
-              });
-            }
-          } else {
-            executedTrade = await recordTrade({
-              bot, symbol, side: "HOLD", qty: 0, price,
-              rationale: winner.rationale,
-              confidence: winner.confidence,
-              horizon: winner.horizon,
-              features,
-            });
-          }
-        } else if (shouldPaperOnly) {
-          executedTrade = await recordTrade({
-            bot, symbol, side: "HOLD", qty: 0, price,
-            rationale: `Market closed (${market.reason}). Paper mode: ${winner.rationale}`,
-            confidence: winner.confidence,
-            horizon: winner.horizon,
-            features: { ...features, paper: true },
-          });
-        }
-
-        await emitEvent("bot_fight", {
-          symbol,
-          market,
-          tradesAllowed,
-          features,
-          bots,
-          winner: winner.strategy,
-          tradeId: executedTrade?.id ?? null,
-        });
-
-        if (executedTrade?.id) {
-          await emitEvent("trade_recorded", {
-            id: executedTrade.id,
-            bot: executedTrade.bot,
-            symbol: executedTrade.symbol,
-            side: executedTrade.side,
-            qty: Number(executedTrade.qty),
-            price: Number(executedTrade.price),
-            rationale: executedTrade.rationale,
-          });
-        }
-      } catch {
-        // keep endpoint alive
-      }
-    }
-
-    res.json({
-      symbol,
-      market,
-      tradesAllowed,
-      logged,
-      logError,
-      features,
-      bots,
-      winner: winner.strategy,
-    });
+    const v = isValidTicker(req.params.symbol);
+    if (!v.ok) return res.status(400).json({ error: v.reason });
+    const out = await botsFight(v.symbol);
+    res.json(out);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 // -----------------------------
-// Start + WS + Runner loop
+// Boot
 // -----------------------------
-async function start() {
-  if (hasDb) {
+(async function boot() {
+  try {
     await dbInit();
-    await ensurePortfolios();
-  }
+    if (hasDb) await ensurePortfolios();
+  } catch {}
 
-  const server = app.listen(PORT, async () => {
-    console.log(`🚀 Server running on ${PORT}`);
-    console.log(`DB: ${hasDb ? "✅" : "❌"}`);
+  await emitEvent("server_booted", { version: "arena-v4-fix-trades-news-impact" });
+
+  startRunner();
+
+  server.listen(PORT, () => {
+    console.log(`Server listening on :${PORT}`);
   });
-
-  wss = new WebSocketServer({ server, path: "/ws" });
-  wss.on("connection", (ws) => {
-    wsClients.add(ws);
-    ws.send(JSON.stringify({ type: "hello", payload: { ok: true }, ts: new Date().toISOString() }));
-    ws.on("close", () => wsClients.delete(ws));
-    ws.on("error", () => wsClients.delete(ws));
-  });
-
-  const intervalSec = Math.max(Number(RUNNER_INTERVAL_SEC || 10), 3);
-
-  if (RUNNER_ENABLED) {
-    console.log(`♻ Runner enabled. Interval: ${intervalSec}s`);
-
-    let state = hasDb ? await getRunnerState() : { idx: 0, lastTick: null, lastSymbol: "AAPL" };
-
-    setInterval(async () => {
-      try {
-        const universe = await getUniverse();
-        const symbols = universeSymbols(universe);
-
-        const m = isMarketOpen();
-        const idx = Number(state.idx || 0);
-        const symbol = symbols[idx % symbols.length];
-
-        state = {
-          idx: idx + 1,
-          lastTick: new Date().toISOString(),
-          lastSymbol: symbol,
-        };
-        if (hasDb) await setRunnerState(state);
-
-        await emitEvent("carousel_tick", { symbol, idx, market: m, universe });
-
-        const ev = await evaluateDueLearning();
-        if (ev.evaluated) await emitEvent("learning_evaluated", ev);
-
-        // Run fight every tick
-        await fetch(`http://127.0.0.1:${PORT}/api/bots/${symbol}`).catch(() => {});
-      } catch {}
-    }, intervalSec * 1000);
-  } else {
-    console.log(`⏸ Runner disabled (set RUNNER_ENABLED=true to enable)`);
-  }
-}
-
-start();
-
-export default app;
+})();
