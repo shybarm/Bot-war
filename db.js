@@ -292,6 +292,121 @@ export async function setWeight(strategy, feature, weight) {
     [strategy, feature, weight]
   );
   return true;
+}      id BIGSERIAL PRIMARY KEY,
+      ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      type TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb
+    );
+  `);
+
+  await dbQuery(`
+    CREATE TABLE IF NOT EXISTS model_weights (
+      strategy TEXT NOT NULL,
+      feature TEXT NOT NULL,
+      weight NUMERIC NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY(strategy, feature)
+    );
+  `);
+
+  // Defaults
+  await dbQuery(`
+    INSERT INTO settings(key, value)
+    VALUES ('learning_speed', '{"mode":"realtime","evalAfterSec":3600}'::jsonb)
+    ON CONFLICT (key) DO NOTHING;
+  `);
+
+  await dbQuery(`
+    INSERT INTO settings(key, value)
+    VALUES ('universe', '{"mode":"any","custom":[]}'::jsonb)
+    ON CONFLICT (key) DO NOTHING;
+  `);
+
+  await dbQuery(`
+    INSERT INTO runner_state(id, value)
+    VALUES ('main', '{"idx":0,"lastTick":null,"lastSymbol":"AAPL"}'::jsonb)
+    ON CONFLICT (id) DO NOTHING;
+  `);
+
+  // Initialize weights
+  const strategies = ["sp500_long", "market_swing", "day_trade", "news_only"];
+  const features = ["bias", "avgSent", "changePercent"];
+
+  for (const s of strategies) {
+    for (const f of features) {
+      await dbQuery(
+        `
+        INSERT INTO model_weights(strategy, feature, weight)
+        VALUES ($1,$2,0)
+        ON CONFLICT (strategy, feature) DO NOTHING
+      `,
+        [s, f]
+      );
+    }
+  }
+}
+
+export async function getSetting(key) {
+  if (!hasDb) return null;
+  const r = await dbQuery(`SELECT value FROM settings WHERE key=$1`, [key]);
+  return r.rows?.[0]?.value ?? null;
+}
+
+export async function setSetting(key, valueObj) {
+  if (!hasDb) return null;
+  await dbQuery(
+    `
+    INSERT INTO settings(key, value, updated_at)
+    VALUES ($1, $2::jsonb, NOW())
+    ON CONFLICT (key)
+    DO UPDATE SET value=$2::jsonb, updated_at=NOW();
+  `,
+    [key, JSON.stringify(valueObj)]
+  );
+  return valueObj;
+}
+
+export async function getRunnerState() {
+  if (!hasDb) return { idx: 0, lastTick: null, lastSymbol: "AAPL" };
+  const r = await dbQuery(`SELECT value FROM runner_state WHERE id='main'`);
+  return r.rows?.[0]?.value ?? { idx: 0, lastTick: null, lastSymbol: "AAPL" };
+}
+
+export async function setRunnerState(valueObj) {
+  if (!hasDb) return valueObj;
+  await dbQuery(
+    `
+    INSERT INTO runner_state(id, value, updated_at)
+    VALUES ('main', $1::jsonb, NOW())
+    ON CONFLICT (id)
+    DO UPDATE SET value=$1::jsonb, updated_at=NOW();
+  `,
+    [JSON.stringify(valueObj)]
+  );
+  return valueObj;
+}
+
+// model weights helpers (used by server.js)
+export async function getWeights(strategy) {
+  if (!hasDb) return { bias: 0, avgSent: 0, changePercent: 0 };
+  const r = await dbQuery(`SELECT feature, weight FROM model_weights WHERE strategy=$1`, [strategy]);
+  const out = { bias: 0, avgSent: 0, changePercent: 0 };
+  for (const row of r.rows || []) out[row.feature] = Number(row.weight || 0);
+  return out;
+}
+
+export async function setWeight(strategy, feature, weight) {
+  if (!hasDb) return null;
+  await dbQuery(
+    `
+    INSERT INTO model_weights(strategy, feature, weight, updated_at)
+    VALUES ($1,$2,$3,NOW())
+    ON CONFLICT (strategy, feature)
+    DO UPDATE SET weight=$3, updated_at=NOW()
+  `,
+    [strategy, feature, weight]
+  );
+  return true;
 }  `);
 
   await dbQuery(`
@@ -466,4 +581,5 @@ export async function setWeight(strategy, feature, weight) {
     [strategy, feature, weight]
   );
 }
+
 
