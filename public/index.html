@@ -11,231 +11,226 @@
   <style>
     body{
       background:
-        radial-gradient(1200px 700px at 20% 10%, rgba(99,102,241,.28), transparent 60%),
-        radial-gradient(900px 600px at 80% 60%, rgba(20,184,166,.22), transparent 55%),
-        #070b1a;
+        radial-gradient(1200px 700px at 20% 10%, rgba(99,102,241,.22), transparent 60%),
+        radial-gradient(900px 600px at 80% 60%, rgba(20,184,166,.18), transparent 55%),
+        #060912;
       color:#e5e7eb;
     }
     .glass{
       background: rgba(17,24,39,.58);
-      border:1px solid rgba(255,255,255,.08);
-      box-shadow:0 20px 80px rgba(0,0,0,.45);
-      backdrop-filter: blur(16px);
+      border: 1px solid rgba(255,255,255,.08);
+      box-shadow: 0 20px 80px rgba(0,0,0,.45);
+      backdrop-filter: blur(14px);
     }
     .chip{
-      border:1px solid rgba(255,255,255,.10);
+      border:1px solid rgba(255,255,255,.12);
       background: rgba(255,255,255,.06);
     }
-    .muted{ color: rgba(229,231,235,.7); }
+    .muted{ color: rgba(229,231,235,.68); }
     .badge-real{
-      background: linear-gradient(135deg,#22c55e,#16a34a);
-      color:#021b0d;
+      background: linear-gradient(135deg, rgba(16,185,129,.9), rgba(5,150,105,.85));
     }
     .badge-mock{
-      background: linear-gradient(135deg,#f97316,#ef4444);
-      color:#220900;
+      background: linear-gradient(135deg, rgba(239,68,68,.9), rgba(220,38,38,.85));
     }
   </style>
 </head>
 
 <body class="min-h-screen">
-<div class="max-w-6xl mx-auto px-6 py-10">
+  <div class="max-w-6xl mx-auto px-6 py-10">
 
-  <!-- Header -->
-  <div class="flex items-start justify-between gap-6">
-    <div>
-      <h1 class="text-4xl font-bold tracking-tight">
-        AI Trading Arena
-      </h1>
-      <p class="mt-2 muted max-w-2xl">
-        Autonomous trading intelligence. Four AI bots compete continuously using live markets, news, and persistent learning.
-      </p>
+    <!-- Header -->
+    <div class="flex items-start justify-between gap-6">
+      <div>
+        <h1 class="text-4xl font-bold tracking-tight">AI Trading Arena</h1>
+        <p class="mt-2 muted max-w-2xl">
+          Autonomous trading intelligence. Four bots. Continuous learning.
+          <span class="block mt-1">System operates continuously during market hours.</span>
+        </p>
+      </div>
+      <div class="flex items-center gap-3">
+        <a href="/war-room.html" class="chip px-4 py-2 rounded-xl hover:opacity-90">⚔️ War Room</a>
+        <span id="wsStatus" class="chip px-3 py-2 rounded-xl text-xs muted">WS: connecting…</span>
+      </div>
     </div>
 
-    <div class="flex items-center gap-3">
-      <a href="/war-room.html" class="chip px-4 py-2 rounded-xl hover:opacity-90">
-        ⚔️ War Room
-      </a>
-      <span id="wsStatus" class="chip px-4 py-2 rounded-xl text-xs muted">
-        WS: connecting…
-      </span>
+    <!-- LIVE STATUS BAR -->
+    <div class="glass mt-8 rounded-2xl p-5">
+      <div class="grid md:grid-cols-4 gap-4">
+        <div>
+          <div class="text-xs muted">Current Symbol</div>
+          <div id="liveSymbol" class="text-2xl font-bold mt-1">—</div>
+        </div>
+        <div>
+          <div class="text-xs muted">Market State</div>
+          <div id="marketState" class="text-lg font-semibold mt-1">—</div>
+        </div>
+        <div>
+          <div class="text-xs muted">Last Event</div>
+          <div id="lastEvent" class="text-sm mt-2 muted">—</div>
+        </div>
+        <div>
+          <div class="text-xs muted">Mode</div>
+          <div class="text-lg font-semibold mt-1">Live Autonomous</div>
+        </div>
+      </div>
     </div>
+
+    <!-- MAIN GRID -->
+    <div class="grid lg:grid-cols-12 gap-6 mt-8">
+
+      <!-- LEFT: BOT DECISIONS -->
+      <div class="lg:col-span-7 glass rounded-2xl p-6">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xl font-semibold">Latest Bot Decisions</h2>
+          <span class="chip px-3 py-1 rounded-lg text-xs muted">Auto-updated</span>
+        </div>
+
+        <div class="grid sm:grid-cols-3 gap-4 mt-5">
+          <div class="chip rounded-2xl p-4">
+            <div class="text-xs muted">Price</div>
+            <div id="priceBox" class="text-2xl font-bold mt-1">—</div>
+          </div>
+          <div class="chip rounded-2xl p-4">
+            <div class="text-xs muted">Change %</div>
+            <div id="chgBox" class="text-2xl font-bold mt-1">—</div>
+          </div>
+          <div class="chip rounded-2xl p-4">
+            <div class="text-xs muted">Avg News Sentiment</div>
+            <div id="sentBox" class="text-2xl font-bold mt-1">—</div>
+          </div>
+        </div>
+
+        <div class="mt-5 chip rounded-2xl p-4">
+          <div class="text-xs muted">Winning Strategy</div>
+          <div id="winnerBox" class="text-lg font-semibold mt-1">—</div>
+          <div id="marketDetail" class="text-xs muted mt-2">—</div>
+        </div>
+
+        <div class="mt-6">
+          <h3 class="font-semibold">Bot Signals</h3>
+          <div id="botsList" class="mt-3 grid sm:grid-cols-2 gap-3"></div>
+        </div>
+      </div>
+
+      <!-- RIGHT: NEWS -->
+      <div class="lg:col-span-5 glass rounded-2xl p-6">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xl font-semibold">Live News Impact</h2>
+          <span id="newsProviderBadge" class="hidden px-3 py-1 rounded-lg text-xs font-semibold text-white"></span>
+        </div>
+        <p class="text-sm muted mt-1">Bound to current carousel symbol</p>
+
+        <div id="newsBox" class="mt-4 space-y-3">
+          <div class="muted">Waiting for symbol…</div>
+        </div>
+      </div>
+    </div>
+
   </div>
-
-  <!-- Live Status Bar -->
-  <div class="glass rounded-2xl p-5 mt-8">
-    <div class="flex flex-wrap gap-3 items-center">
-      <span class="chip px-3 py-2 rounded-xl text-xs muted" id="marketChip">Market: —</span>
-      <span class="chip px-3 py-2 rounded-xl text-xs muted" id="runnerChip">Runner: —</span>
-      <span class="chip px-3 py-2 rounded-xl text-xs muted">
-        Symbol: <b id="liveSymbol">—</b>
-      </span>
-      <span class="chip px-3 py-2 rounded-xl text-xs muted">
-        Last event: <span id="lastEvent">—</span>
-      </span>
-    </div>
-  </div>
-
-  <!-- Main Grid -->
-  <div class="grid lg:grid-cols-12 gap-6 mt-8">
-
-    <!-- Left -->
-    <div class="lg:col-span-7 glass rounded-2xl p-6">
-      <h2 class="text-xl font-semibold">Current Intelligence Snapshot</h2>
-
-      <div class="grid sm:grid-cols-3 gap-4 mt-5">
-        <div class="chip rounded-2xl p-4">
-          <div class="text-xs muted">Price</div>
-          <div id="priceBox" class="text-2xl font-bold mt-1">—</div>
-        </div>
-        <div class="chip rounded-2xl p-4">
-          <div class="text-xs muted">Change %</div>
-          <div id="chgBox" class="text-2xl font-bold mt-1">—</div>
-        </div>
-        <div class="chip rounded-2xl p-4">
-          <div class="text-xs muted">Avg news sentiment</div>
-          <div id="sentBox" class="text-2xl font-bold mt-1">—</div>
-        </div>
-      </div>
-
-      <div class="mt-5 chip rounded-2xl p-4">
-        <div class="text-xs muted">Leading bot (highest conviction)</div>
-        <div id="winnerBox" class="text-lg font-semibold mt-1">—</div>
-        <div id="marketNote" class="text-xs muted mt-2">—</div>
-      </div>
-
-      <div class="mt-6">
-        <h3 class="font-semibold">Bots (live)</h3>
-        <div id="botsList" class="mt-3 grid sm:grid-cols-2 gap-3">
-          <div class="muted">Waiting for runner…</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Right -->
-    <div class="lg:col-span-5 glass rounded-2xl p-6">
-      <h2 class="text-xl font-semibold">Live News Intelligence</h2>
-      <p class="text-sm muted mt-1">
-        Articles are continuously refreshed and bound to the active symbol.
-      </p>
-
-      <div id="newsBox" class="mt-4 space-y-3">
-        <div class="muted">—</div>
-      </div>
-    </div>
-  </div>
-
-</div>
 
 <script>
-const $ = id => document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 
 let currentSymbol = null;
 let ws = null;
 
-function setWS(text){
-  $("wsStatus").textContent = text;
-}
-
-function providerBadge(provider){
-  if(provider === "mock"){
-    return '<span class="badge-mock px-2 py-1 rounded-lg text-xs font-semibold">MOCK</span>';
-  }
-  return `<span class="badge-real px-2 py-1 rounded-lg text-xs font-semibold">${provider.toUpperCase()}</span>`;
-}
+function setWsStatus(t){ $("wsStatus").textContent = t; }
 
 function renderBots(bots){
   const box = $("botsList");
   box.innerHTML = "";
-  bots.forEach(b => {
-    const el = document.createElement("div");
-    el.className = "chip rounded-2xl p-4";
-    el.innerHTML = `
+  for(const b of bots){
+    const d = document.createElement("div");
+    d.className = "chip rounded-2xl p-4";
+    d.innerHTML = `
       <div class="flex items-center justify-between">
         <div class="font-semibold">${b.label}</div>
         <div class="text-xs muted">${b.horizon}</div>
       </div>
       <div class="mt-2 text-sm">
-        <b>${b.signal}</b> • conf ${b.confidence}
+        <span class="font-semibold">${b.signal}</span>
+        <span class="muted">• conf ${b.confidence}</span>
       </div>
       <div class="mt-2 text-xs muted">${b.rationale || ""}</div>
     `;
-    box.appendChild(el);
-  });
+    box.appendChild(d);
+  }
 }
 
 function renderNews(pack){
   const box = $("newsBox");
-  const items = pack.items || [];
-  if(!items.length){
-    box.innerHTML = `<div class="muted">No news</div>`;
+  const badge = $("newsProviderBadge");
+
+  if(!pack || !pack.items || !pack.items.length){
+    box.innerHTML = `<div class="muted">No articles available</div>`;
+    badge.classList.add("hidden");
     return;
   }
 
-  box.innerHTML = items.map(n => `
+  badge.classList.remove("hidden");
+  badge.textContent = pack.provider === "mock" ? "MOCK DATA" : pack.provider;
+  badge.className = `px-3 py-1 rounded-lg text-xs font-semibold text-white ${
+    pack.provider === "mock" ? "badge-mock" : "badge-real"
+  }`;
+
+  box.innerHTML = pack.items.map(n => `
     <div class="chip rounded-2xl p-4">
-      <div class="flex items-center justify-between gap-3">
-        <div class="text-sm font-semibold">${(n.title||"").slice(0,140)}</div>
-        ${providerBadge(pack.provider)}
-      </div>
+      <div class="text-sm font-semibold">${n.title}</div>
       <div class="text-xs muted mt-1">
-        ${n.source || ""} • ${n.publishedAt ? new Date(n.publishedAt).toLocaleString() : ""}
+        ${n.source} • ${n.publishedAt ? new Date(n.publishedAt).toLocaleString() : ""}
       </div>
-      <div class="text-xs muted mt-2">${(n.summary||"").slice(0,160)}</div>
+      <div class="text-xs muted mt-2">${n.summary || ""}</div>
     </div>
   `).join("");
 }
 
-async function fetchSnapshot(symbol){
-  const res = await fetch(`/api/bots/${symbol}`);
-  const data = await res.json();
-
-  $("winnerBox").textContent = data.winner || "—";
-  $("marketNote").textContent =
-    `Market: ${data.market.open ? "OPEN" : "CLOSED"} (${data.market.reason}) • Trades allowed: ${data.tradesAllowed ? "YES" : "NO"}`;
-
-  const f = data.features || {};
-  $("priceBox").textContent = f.price ? `$${Number(f.price).toFixed(2)}` : "—";
-  $("chgBox").textContent = f.changePercent !== undefined ? `${Number(f.changePercent).toFixed(2)}%` : "—";
-  $("sentBox").textContent = f.avgSent !== undefined ? Number(f.avgSent).toFixed(2) : "—";
-
-  renderBots(data.bots || []);
-
-  const news = await fetch(`/api/news/${symbol}`).then(r=>r.json());
-  renderNews(news);
+async function getJSON(url){
+  const r = await fetch(url);
+  const t = await r.text();
+  return JSON.parse(t);
 }
 
 function connectWS(){
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
 
-  ws.onopen = () => setWS("WS: live ✅");
-  ws.onclose = () => setWS("WS: closed ⚠️");
-  ws.onerror = () => setWS("WS: error ⚠️");
+  ws.onopen = () => setWsStatus("WS: live ✅");
+  ws.onclose = () => setWsStatus("WS: closed ⚠️");
+  ws.onerror = () => setWsStatus("WS: error ⚠️");
 
-  ws.onmessage = async ev => {
+  ws.onmessage = async (ev) => {
     const msg = JSON.parse(ev.data);
-    $("lastEvent").textContent = msg.type;
+    $("lastEvent").textContent = `${msg.type} • ${new Date(msg.ts).toLocaleTimeString()}`;
 
     if(msg.type === "carousel_tick"){
       currentSymbol = msg.payload.symbol;
       $("liveSymbol").textContent = currentSymbol;
-      $("marketChip").textContent =
-        `Market: ${msg.payload.market.open ? "OPEN" : "CLOSED"} (${msg.payload.market.reason})`;
-      await fetchSnapshot(currentSymbol);
+      $("marketState").textContent =
+        msg.payload.market.open ? "OPEN" : msg.payload.market.reason;
     }
 
     if(msg.type === "bot_fight"){
-      await fetchSnapshot(msg.payload.symbol);
+      const f = msg.payload.features || {};
+      $("priceBox").textContent = f.price ? `$${Number(f.price).toFixed(2)}` : "—";
+      $("chgBox").textContent = f.changePercent !== undefined ? `${f.changePercent.toFixed(2)}%` : "—";
+      $("sentBox").textContent = f.avgSent !== undefined ? f.avgSent.toFixed(2) : "—";
+      $("winnerBox").textContent = msg.payload.winner;
+      $("marketDetail").textContent =
+        `Market: ${msg.payload.market.open ? "OPEN" : "CLOSED"} • Trades: ${msg.payload.tradesAllowed ? "YES" : "NO"}`;
+
+      renderBots(msg.payload.bots || []);
+
+      if(currentSymbol){
+        const news = await getJSON(`/api/news/${currentSymbol}`);
+        renderNews(news);
+      }
     }
   };
 }
 
-(async function init(){
-  const runner = await fetch("/api/runner/status").then(r=>r.json());
-  $("runnerChip").textContent = `Runner: ${runner.enabled ? "ON" : "OFF"} (${runner.intervalSec}s)`;
-  connectWS();
-})();
+connectWS();
 </script>
+
 </body>
 </html>
