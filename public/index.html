@@ -27,299 +27,408 @@
     }
     .muted{ color: rgba(229,231,235,.68); }
 
-    .modal-bg{
-      background: rgba(0,0,0,.58);
-      backdrop-filter: blur(6px);
+    .modalScrim{
+      position:fixed; inset:0;
+      background: rgba(0,0,0,.55);
+      display:none;
+      align-items:center; justify-content:center;
+      padding: 18px;
+      z-index: 80;
     }
     .modal{
-      background: rgba(17,24,39,.72);
-      border: 1px solid rgba(255,255,255,.10);
-      box-shadow: 0 24px 90px rgba(0,0,0,.60);
-      backdrop-filter: blur(18px);
+      width: min(980px, 96vw);
+      border-radius: 18px;
+      max-height: 85vh;
+      overflow:auto;
     }
-
-    .pill-good{ background: rgba(16,185,129,.18); border: 1px solid rgba(16,185,129,.25); }
-    .pill-bad{ background: rgba(239,68,68,.18); border: 1px solid rgba(239,68,68,.25); }
-    .pill-mix{ background: rgba(245,158,11,.18); border: 1px solid rgba(245,158,11,.25); }
+    .kbd{
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.06);
+    }
   </style>
 </head>
-
 <body class="min-h-screen">
-  <div class="max-w-6xl mx-auto px-6 py-10">
+  <div class="max-w-6xl mx-auto px-6 py-8">
 
-    <!-- Header -->
-    <div class="flex items-start justify-between gap-6">
+    <!-- TOP COMMAND BAR (NAV) -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
       <div>
-        <h1 class="text-4xl font-bold tracking-tight">AI Trading Arena</h1>
-        <p class="mt-2 muted max-w-2xl">
+        <div class="text-4xl font-semibold tracking-tight">AI Trading Arena</div>
+        <div class="muted mt-1">
           General news → impacted tickers, with audit-grade evidence. This experience is designed to “show the research.”
-        </p>
+        </div>
       </div>
-      <div class="flex items-center gap-3">
-        <span id="apiChip" class="chip px-3 py-2 rounded-xl text-xs muted">API: —</span>
-        <span id="wsStatus" class="chip px-3 py-2 rounded-xl text-xs muted">WS: —</span>
+
+      <div class="flex flex-wrap items-center gap-2 justify-start sm:justify-end">
+        <a href="/war-room.html"
+           class="chip px-4 py-2 rounded-xl hover:opacity-90 transition"
+           title="Open the live command center">
+          ⚔️ War Room
+        </a>
+
+        <button id="btnRunner"
+                class="chip px-4 py-2 rounded-xl hover:opacity-90 transition"
+                title="View runner + market mode">
+          Runner Status
+        </button>
+
+        <button id="btnHow"
+                class="chip px-4 py-2 rounded-xl hover:opacity-90 transition"
+                title="Explain this system">
+          How it works
+        </button>
+
+        <div id="apiChip" class="chip px-4 py-2 rounded-xl text-xs whitespace-nowrap">
+          API: <span class="kbd" id="apiJson">{}</span>
+        </div>
+
+        <div id="wsBadge" class="chip px-3 py-2 rounded-xl text-xs flex items-center gap-2 whitespace-nowrap">
+          <span id="wsText">WS: connecting…</span>
+          <span id="wsDot" class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+        </div>
       </div>
     </div>
 
-    <!-- News Intelligence -->
-    <div class="glass mt-8 rounded-2xl p-6">
-      <div class="flex items-center justify-between gap-4">
+    <!-- MAIN CARD -->
+    <div class="glass rounded-2xl mt-8 p-6">
+      <div class="flex items-start justify-between gap-3">
         <div>
-          <h2 class="text-xl font-semibold">News Intelligence</h2>
-          <p class="text-sm muted mt-1">Click a headline to see impacted US-traded stocks + an Evidence Drawer.</p>
-        </div>
-        <span id="newsProviderBadge" class="chip px-3 py-1 rounded-lg text-xs muted">Provider: —</span>
-      </div>
-
-      <div id="newsBox" class="mt-4 space-y-3">
-        <div class="muted">Loading…</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Article -> Impact Modal -->
-  <div id="articleModal" class="hidden fixed inset-0 modal-bg">
-    <div class="modal max-w-3xl mx-auto mt-14 rounded-3xl overflow-hidden">
-      <div class="flex items-start justify-between gap-4 p-5 border-b border-white/10">
-        <div>
-          <div class="text-xs muted">Article impact research</div>
-          <h3 class="text-xl font-semibold mt-1" id="articleTitle">—</h3>
-          <div class="text-xs muted mt-2" id="articleMeta">—</div>
-        </div>
-        <button id="closeArticle" class="chip px-3 py-2 rounded-xl hover:opacity-90">✕</button>
-      </div>
-
-      <div class="p-5">
-        <div class="text-sm muted">Likely impacted US-traded companies:</div>
-        <div id="impactList" class="mt-3 space-y-2">
-          <div class="muted">Loading…</div>
-        </div>
-
-        <div class="mt-4 flex items-center justify-between gap-3">
-          <div class="text-xs muted" id="impactProvider">—</div>
-          <button id="toggleEvidence" class="chip px-4 py-2 rounded-xl hover:opacity-90 text-sm">
-            🔎 Evidence Drawer
-          </button>
-        </div>
-
-        <!-- Evidence Drawer -->
-        <div id="evidenceDrawer" class="hidden mt-4 chip rounded-2xl p-4">
-          <div class="flex items-start justify-between gap-4">
-            <div>
-              <div class="text-sm font-semibold">Evidence</div>
-              <div class="text-xs muted mt-1">What the system matched, and where the output came from.</div>
-            </div>
-            <button id="hideEvidence" class="chip px-3 py-2 rounded-xl hover:opacity-90 text-xs">Hide</button>
+          <div class="text-xl font-semibold">News Intelligence</div>
+          <div class="muted text-sm mt-1">
+            Click a headline to see impacted US-traded stocks + an Evidence Drawer.
           </div>
+        </div>
+        <div class="chip text-xs px-3 py-2 rounded-xl whitespace-nowrap">
+          <span id="providerPill">Provider: —</span>
+        </div>
+      </div>
 
-          <div class="mt-4 space-y-3">
-            <div>
-              <div class="text-xs muted">Provider</div>
-              <div id="evidenceProvider" class="text-sm mt-1">—</div>
-            </div>
-
-            <div>
-              <div class="text-xs muted">Matched buckets</div>
-              <div id="evidenceBuckets" class="mt-2 flex flex-wrap gap-2"></div>
-            </div>
-
-            <div>
-              <div class="text-xs muted">Matched keywords</div>
-              <div id="evidenceKeywords" class="mt-2 flex flex-wrap gap-2"></div>
-            </div>
-
-            <div id="aiNotesWrap" class="hidden">
-              <div class="text-xs muted">AI notes</div>
-              <div id="aiNotes" class="text-sm mt-1 muted">—</div>
-            </div>
-
-            <div class="text-xs muted">
-              Governance: Evidence is intentionally displayed so the user can validate plausibility and avoid “black box” trust.
-            </div>
+      <div class="mt-5">
+        <div id="generalNews" class="space-y-3">
+          <div class="chip rounded-xl p-4">
+            <div class="text-sm font-semibold">Loading news…</div>
+            <div class="muted text-xs mt-1">If this stays empty, check /api/health and your NEWS keys.</div>
           </div>
         </div>
       </div>
+    </div>
 
-      <div class="p-5 border-t border-white/10 flex items-center justify-end">
-        <button id="closeArticle2" class="chip px-4 py-2 rounded-xl hover:opacity-90">Close</button>
+    <!-- EVIDENCE DRAWER (simple modal) -->
+    <div id="evidenceModal" class="modalScrim">
+      <div class="glass modal p-6">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <div class="text-xl font-semibold">Evidence Drawer</div>
+            <div class="muted text-sm mt-1">Why this article maps to these tickers (human-readable chain).</div>
+          </div>
+          <button class="chip px-3 py-2 rounded-xl hover:opacity-90" data-close="evidenceModal">Close</button>
+        </div>
+
+        <div class="mt-5">
+          <div class="chip rounded-xl p-4">
+            <div class="text-sm font-semibold" id="eTitle">—</div>
+            <div class="muted text-xs mt-1" id="eMeta">—</div>
+            <div class="mt-3 text-sm" id="eSummary">—</div>
+          </div>
+
+          <div class="mt-4">
+            <div class="text-sm font-semibold">Impacted tickers</div>
+            <div class="muted text-xs mt-1">Ranked list + confidence, with “why”.</div>
+            <div id="impactList" class="mt-3 space-y-2"></div>
+          </div>
+
+          <div class="mt-5">
+            <div class="text-sm font-semibold">Evidence signals</div>
+            <div class="muted text-xs mt-1">What the system matched (AI if available, heuristic fallback otherwise).</div>
+            <div id="evidenceSignals" class="mt-3 chip rounded-xl p-4 text-sm"></div>
+          </div>
+        </div>
       </div>
     </div>
+
+    <!-- RUNNER STATUS MODAL -->
+    <div id="runnerModal" class="modalScrim">
+      <div class="glass modal p-6">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <div class="text-xl font-semibold">Runner Status</div>
+            <div class="muted text-sm mt-1">Operational posture, market gate, and scan parameters.</div>
+          </div>
+          <button class="chip px-3 py-2 rounded-xl hover:opacity-90" data-close="runnerModal">Close</button>
+        </div>
+
+        <div class="mt-5 grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div class="chip rounded-xl p-4">
+            <div class="text-sm font-semibold">Market</div>
+            <div class="muted text-xs mt-1" id="rmMarket">—</div>
+          </div>
+          <div class="chip rounded-xl p-4">
+            <div class="text-sm font-semibold">Runner</div>
+            <div class="muted text-xs mt-1" id="rmRunner">—</div>
+          </div>
+          <div class="chip rounded-xl p-4 md:col-span-2">
+            <div class="text-sm font-semibold">State</div>
+            <pre class="muted text-xs mt-2 whitespace-pre-wrap" id="rmState">{}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HOW IT WORKS MODAL -->
+    <div id="howModal" class="modalScrim">
+      <div class="glass modal p-6">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <div class="text-xl font-semibold">How This System Works</div>
+            <div class="muted text-sm mt-1">Observe → Decide → Act → Learn → Repeat (always-on).</div>
+          </div>
+          <button class="chip px-3 py-2 rounded-xl hover:opacity-90" data-close="howModal">Close</button>
+        </div>
+
+        <div class="mt-5 grid grid-cols-1 md:grid-cols-5 gap-3">
+          <div class="chip rounded-xl p-4 md:col-span-2">
+            <div class="text-sm font-semibold">1) Observe</div>
+            <div class="muted text-xs mt-1">Pull price + general news; attach sentiment + signals.</div>
+          </div>
+          <div class="chip rounded-xl p-4 md:col-span-2">
+            <div class="text-sm font-semibold">2) Decide</div>
+            <div class="muted text-xs mt-1">Each bot outputs BUY/SELL/HOLD with a rationale + confidence.</div>
+          </div>
+          <div class="chip rounded-xl p-4">
+            <div class="text-sm font-semibold">3) Act</div>
+            <div class="muted text-xs mt-1">Market open: real trades. Closed: simulation + learning.</div>
+          </div>
+
+          <div class="chip rounded-xl p-4 md:col-span-2">
+            <div class="text-sm font-semibold">4) Learn</div>
+            <div class="muted text-xs mt-1">
+              After a horizon, outcomes are graded WIN/LOSS and update shared weights.
+            </div>
+          </div>
+          <div class="chip rounded-xl p-4 md:col-span-3">
+            <div class="text-sm font-semibold">5) Repeat (autonomous)</div>
+            <div class="muted text-xs mt-1">
+              The runner rotates symbols continuously and persists state so redeploys resume smoothly.
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-4 chip rounded-xl p-4">
+          <div class="text-sm font-semibold">Where to see “the research”</div>
+          <div class="muted text-sm mt-1">
+            Open <span class="kbd">War Room</span> to see the event stream, bot reasoning, trade history,
+            and learning verdicts over time.
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
 
 <script>
-const $ = (id) => document.getElementById(id);
+  const $ = (id) => document.getElementById(id);
 
-function setWsStatus(t){ $("wsStatus").textContent = t; }
+  function show(id){ $(id).style.display = "flex"; }
+  function hide(id){ $(id).style.display = "none"; }
 
-async function getJSON(url, opts){
-  const r = await fetch(url, opts);
-  const t = await r.text();
-  return JSON.parse(t);
-}
-
-function openArticleModal(){
-  $("articleModal").classList.remove("hidden");
-  document.body.classList.add("overflow-hidden");
-}
-function closeArticleModal(){
-  $("articleModal").classList.add("hidden");
-  document.body.classList.remove("overflow-hidden");
-  // reset drawer state
-  $("evidenceDrawer").classList.add("hidden");
-}
-$("closeArticle").addEventListener("click", closeArticleModal);
-$("closeArticle2").addEventListener("click", closeArticleModal);
-$("articleModal").addEventListener("click", (e) => { if(e.target === $("articleModal")) closeArticleModal(); });
-
-function pillClass(direction){
-  if(direction === "benefit") return "pill-good";
-  if(direction === "risk") return "pill-bad";
-  return "pill-mix";
-}
-
-function chipList(el, items){
-  el.innerHTML = "";
-  const arr = (items || []).slice(0, 40);
-  if(!arr.length){
-    el.innerHTML = `<span class="muted text-sm">—</span>`;
-    return;
-  }
-  for(const t of arr){
-    const s = document.createElement("span");
-    s.className = "chip px-3 py-1 rounded-full text-xs muted";
-    s.textContent = t;
-    el.appendChild(s);
-  }
-}
-
-function renderEvidence(evidence){
-  if(!evidence){
-    $("evidenceProvider").textContent = "—";
-    chipList($("evidenceBuckets"), []);
-    chipList($("evidenceKeywords"), []);
-    $("aiNotesWrap").classList.add("hidden");
-    return;
-  }
-
-  // provider can be "heuristic" or "openai"
-  if(evidence.provider === "openai"){
-    $("evidenceProvider").textContent = "OpenAI (ranked) + Heuristic (audit trail)";
-    const h = evidence.heuristicEvidence || {};
-    chipList($("evidenceBuckets"), h.matchedBuckets || []);
-    chipList($("evidenceKeywords"), h.matchedKeywords || []);
-    const notes = evidence.aiEvidence?.notes || "";
-    if(notes){
-      $("aiNotesWrap").classList.remove("hidden");
-      $("aiNotes").textContent = notes;
-    } else {
-      $("aiNotesWrap").classList.add("hidden");
-    }
-  } else {
-    $("evidenceProvider").textContent = "Heuristic mapping (transparent rules)";
-    chipList($("evidenceBuckets"), evidence.matchedBuckets || []);
-    chipList($("evidenceKeywords"), evidence.matchedKeywords || []);
-    $("aiNotesWrap").classList.add("hidden");
-  }
-}
-
-$("toggleEvidence").addEventListener("click", () => {
-  $("evidenceDrawer").classList.toggle("hidden");
-});
-$("hideEvidence").addEventListener("click", () => {
-  $("evidenceDrawer").classList.add("hidden");
-});
-
-async function loadDiagnostics(){
-  const health = await getJSON("/api/health");
-  $("apiChip").textContent = `API: ${JSON.stringify(health.apis)}`;
-}
-
-function renderNews(pack){
-  $("newsProviderBadge").textContent = `Provider: ${pack?.provider || "—"}`;
-  const box = $("newsBox");
-  const items = pack?.items || [];
-  if(!items.length){
-    box.innerHTML = `<div class="muted">No headlines available.</div>`;
-    return;
-  }
-
-  box.innerHTML = items.map((n, idx) => `
-    <button data-idx="${idx}" class="w-full text-left chip rounded-2xl p-4 hover:opacity-90">
-      <div class="text-sm font-semibold">${n.title || ""}</div>
-      <div class="text-xs muted mt-1">${n.source || ""} • ${n.publishedAt ? new Date(n.publishedAt).toLocaleString() : ""}</div>
-      <div class="text-xs muted mt-2">${n.summary || ""}</div>
-      <div class="text-xs muted mt-2">Click to see impacted stocks + evidence →</div>
-    </button>
-  `).join("");
-
-  box.querySelectorAll("button[data-idx]").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      const i = Number(btn.getAttribute("data-idx"));
-      const article = items[i];
-
-      $("articleTitle").textContent = article.title || "Article";
-      $("articleMeta").textContent = `${article.source || ""} • ${article.publishedAt ? new Date(article.publishedAt).toLocaleString() : ""}`;
-      $("impactList").innerHTML = `<div class="muted">Analyzing…</div>`;
-      $("impactProvider").textContent = "—";
-      renderEvidence(null);
-      openArticleModal();
-
-      try {
-        const out = await getJSON("/api/news/impact", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: article.title || "", summary: article.summary || "" })
-        });
-
-        const itemsOut = out.items || [];
-        if(!itemsOut.length){
-          $("impactList").innerHTML = `<div class="muted">No confident impacted tickers detected for this headline.</div>`;
-          $("impactProvider").textContent = `Provider: ${out.evidence?.provider || out.provider || "—"}`;
-          renderEvidence(out.evidence || null);
-          return;
-        }
-
-        $("impactList").innerHTML = itemsOut.map(x => `
-          <div class="chip rounded-2xl p-4">
-            <div class="flex items-center justify-between gap-3">
-              <div class="font-semibold">${x.ticker} <span class="muted font-normal">• ${x.company || ""}</span></div>
-              <div class="text-xs px-3 py-1 rounded-full ${pillClass(x.direction)}">
-                ${(x.direction || "mixed").toUpperCase()} • ${(x.horizon || "medium")} • ${Number(x.confidence || 0)}%
-              </div>
-            </div>
-            <div class="text-xs muted mt-2">${x.why || ""}</div>
-          </div>
-        `).join("");
-
-        $("impactProvider").textContent = `Provider: ${out.evidence?.provider || "—"} • Evidence available via drawer.`;
-        renderEvidence(out.evidence || null);
-      } catch(e){
-        $("impactList").innerHTML = `<div class="muted">Impact analysis failed. Check server logs.</div>`;
-      }
+  // Close modals via [data-close]
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-close]");
+    if (!btn) return;
+    hide(btn.getAttribute("data-close"));
+  });
+  // Close modal if clicking scrim
+  document.querySelectorAll(".modalScrim").forEach(scrim => {
+    scrim.addEventListener("click", (e) => {
+      if (e.target === scrim) scrim.style.display = "none";
     });
   });
-}
 
-async function loadGeneralNews(){
-  const pack = await getJSON("/api/news/general?limit=10");
-  renderNews(pack);
-}
+  // Buttons
+  $("btnRunner").addEventListener("click", async () => {
+    show("runnerModal");
+    $("rmMarket").textContent = "Loading…";
+    $("rmRunner").textContent = "Loading…";
+    $("rmState").textContent = "{}";
+    try{
+      const r = await fetch("/api/runner/status");
+      const j = await r.json();
+      $("rmMarket").textContent = `${j.market?.open ? "Open" : "Closed"} • ${j.market?.reason || "—"} • TZ: ${j.market?.tz || "—"}`;
+      $("rmRunner").textContent =
+        `enabled=${j.enabled} • intervalSec=${j.intervalSec} • scanBatch=${j.scanBatch} • tradeTop=${j.tradeTop}`;
+      $("rmState").textContent = JSON.stringify(j, null, 2);
+    } catch(e){
+      $("rmMarket").textContent = "Runner status unavailable (check server logs).";
+      $("rmRunner").textContent = "—";
+    }
+  });
 
-function connectWS(){
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => setWsStatus("WS: live ✅");
-  ws.onclose = () => setWsStatus("WS: closed ⚠️");
-  ws.onerror = () => setWsStatus("WS: error ⚠️");
-  return ws;
-}
+  $("btnHow").addEventListener("click", () => show("howModal"));
 
-(async function init(){
-  await loadDiagnostics().catch(()=>{});
-  await loadGeneralNews().catch(()=>{});
-  connectWS();
-  setInterval(() => loadGeneralNews().catch(()=>{}), 90000);
-})();
+  function setWsStatus(text, ok){
+    $("wsText").textContent = text;
+    $("wsDot").className = "w-2.5 h-2.5 rounded-full " + (ok ? "bg-emerald-400" : "bg-amber-400");
+  }
+
+  async function loadDiagnostics(){
+    try{
+      const r = await fetch("/api/health");
+      const j = await r.json();
+      $("apiJson").textContent = JSON.stringify(j.apis || {});
+    } catch {}
+  }
+
+  function renderEvidence(evidence){
+    if(!evidence){
+      $("evidenceSignals").textContent = "No evidence payload available.";
+      return;
+    }
+    const lines = [];
+    if(evidence.provider) lines.push(`Provider: ${evidence.provider}`);
+    if(evidence.aiEvidence){
+      const kw = (evidence.aiEvidence.keywords || []).slice(0, 14);
+      lines.push(`AI keywords: ${kw.join(", ") || "—"}`);
+      if(evidence.aiEvidence.notes) lines.push(`AI notes: ${evidence.aiEvidence.notes}`);
+    }
+    if(evidence.heuristicEvidence){
+      const he = evidence.heuristicEvidence;
+      if(Array.isArray(he.matchedBuckets) && he.matchedBuckets.length){
+        lines.push(`Heuristic buckets: ${he.matchedBuckets.join(" • ")}`);
+      }
+      if(Array.isArray(he.matchedKeywords) && he.matchedKeywords.length){
+        lines.push(`Heuristic keywords: ${he.matchedKeywords.slice(0, 18).join(", ")}`);
+      }
+    } else if (Array.isArray(evidence.matchedBuckets)) {
+      // legacy heuristic payload
+      if(evidence.matchedBuckets.length) lines.push(`Buckets: ${evidence.matchedBuckets.join(" • ")}`);
+      if(Array.isArray(evidence.matchedKeywords) && evidence.matchedKeywords.length)
+        lines.push(`Keywords: ${evidence.matchedKeywords.slice(0, 18).join(", ")}`);
+    }
+    $("evidenceSignals").textContent = lines.join("\n");
+  }
+
+  async function loadGeneralNews(){
+    const wrap = $("generalNews");
+    wrap.innerHTML = `<div class="chip rounded-xl p-4"><div class="text-sm font-semibold">Loading…</div></div>`;
+
+    let pack = null;
+    try{
+      const r = await fetch("/api/news/general?limit=10");
+      pack = await r.json();
+    } catch(e){
+      pack = { provider:"error", items: [] };
+    }
+
+    const provider = pack?.provider || "—";
+    $("providerPill").textContent = `Provider: ${provider}`;
+
+    const items = Array.isArray(pack?.items) ? pack.items : [];
+    if(!items.length){
+      wrap.innerHTML = `
+        <div class="chip rounded-xl p-4">
+          <div class="text-sm font-semibold">No general news available</div>
+          <div class="muted text-xs mt-1">Configure NEWS keys or fallback will populate.</div>
+        </div>
+      `;
+      return;
+    }
+
+    wrap.innerHTML = items.map((a, idx) => {
+      const title = a.title || "Untitled";
+      const source = a.source || provider || "—";
+      const publishedAt = a.publishedAt ? new Date(a.publishedAt).toLocaleString() : "";
+      const summary = a.summary || "";
+
+      return `
+        <button class="chip w-full text-left rounded-xl p-4 hover:opacity-90 transition"
+                data-article="${idx}">
+          <div class="flex items-start justify-between gap-3">
+            <div class="text-sm font-semibold">${title}</div>
+            <div class="muted text-xs whitespace-nowrap">${source}</div>
+          </div>
+          <div class="muted text-xs mt-1">${publishedAt}</div>
+          <div class="muted text-sm mt-2 line-clamp-2">${summary}</div>
+          <div class="muted text-xs mt-2">Click to see impacted stocks + evidence →</div>
+        </button>
+      `;
+    }).join("");
+
+    // click handlers: open evidence drawer + fetch /api/news/impact
+    wrap.querySelectorAll("[data-article]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const idx = Number(btn.getAttribute("data-article"));
+        const a = items[idx];
+
+        $("eTitle").textContent = a.title || "—";
+        $("eMeta").textContent = `${a.source || provider || "—"} • ${a.publishedAt ? new Date(a.publishedAt).toLocaleString() : ""}`;
+        $("eSummary").textContent = a.summary || "—";
+        $("impactList").innerHTML = `<div class="muted text-sm">Analyzing impact…</div>`;
+        $("evidenceSignals").textContent = "Loading evidence…";
+        show("evidenceModal");
+
+        try{
+          const r = await fetch("/api/news/impact", {
+            method:"POST",
+            headers:{ "Content-Type":"application/json" },
+            body: JSON.stringify({ title: a.title || "", summary: a.summary || "" })
+          });
+          const out = await r.json();
+          const list = Array.isArray(out?.items) ? out.items : [];
+
+          if(!list.length){
+            $("impactList").innerHTML = `<div class="muted text-sm">No impacted tickers detected for this article (yet).</div>`;
+          } else {
+            $("impactList").innerHTML = list.map(x => `
+              <div class="chip rounded-xl p-3">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-sm font-semibold">${(x.ticker || "—").toUpperCase()}</div>
+                    <div class="muted text-xs mt-0.5">${x.company || ""}</div>
+                  </div>
+                  <div class="muted text-xs text-right">
+                    ${(x.direction || "mixed").toUpperCase()} • ${(x.horizon || "medium")} • ${Number(x.confidence || 0)}%
+                  </div>
+                </div>
+                <div class="muted text-xs mt-2">${x.why || ""}</div>
+              </div>
+            `).join("");
+          }
+
+          renderEvidence(out?.evidence || null);
+        } catch(e){
+          $("impactList").innerHTML = `<div class="muted text-sm">Impact analysis failed. Check server logs.</div>`;
+          $("evidenceSignals").textContent = "—";
+        }
+      });
+    });
+  }
+
+  function connectWS(){
+    let ws;
+    try{
+      const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
+      ws = new WebSocket(url);
+    } catch(e){
+      setWsStatus("WS: unsupported", false);
+      return null;
+    }
+
+    ws.onopen = () => setWsStatus("WS: live", true);
+    ws.onclose = () => setWsStatus("WS: closed ⚠️", false);
+    ws.onerror = () => setWsStatus("WS: error ⚠️", false);
+    return ws;
+  }
+
+  (async function init(){
+    await loadDiagnostics().catch(()=>{});
+    await loadGeneralNews().catch(()=>{});
+    connectWS();
+    setInterval(() => loadGeneralNews().catch(()=>{}), 90000);
+  })();
 </script>
 </body>
 </html>
