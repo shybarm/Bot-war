@@ -33,6 +33,18 @@
     .badge-mock{
       background: linear-gradient(135deg, rgba(239,68,68,.9), rgba(220,38,38,.85));
     }
+
+    /* Modal */
+    .modal-bg{
+      background: rgba(0,0,0,.58);
+      backdrop-filter: blur(6px);
+    }
+    .modal{
+      background: rgba(17,24,39,.72);
+      border: 1px solid rgba(255,255,255,.10);
+      box-shadow: 0 24px 90px rgba(0,0,0,.60);
+      backdrop-filter: blur(18px);
+    }
   </style>
 </head>
 
@@ -49,6 +61,7 @@
         </p>
       </div>
       <div class="flex items-center gap-3">
+        <button id="howItWorksBtn" class="chip px-4 py-2 rounded-xl hover:opacity-90">❓ How it works</button>
         <a href="/war-room.html" class="chip px-4 py-2 rounded-xl hover:opacity-90">⚔️ War Room</a>
         <span id="wsStatus" class="chip px-3 py-2 rounded-xl text-xs muted">WS: connecting…</span>
       </div>
@@ -129,6 +142,139 @@
 
   </div>
 
+  <!-- HOW IT WORKS MODAL -->
+  <div id="howModalOverlay" class="hidden fixed inset-0 modal-bg"></div>
+
+  <div id="howModal" class="hidden fixed inset-0 flex items-center justify-center p-5">
+    <div class="modal w-full max-w-5xl rounded-3xl overflow-hidden">
+      <div class="flex items-start justify-between gap-4 p-5 border-b border-white/10">
+        <div>
+          <div class="text-xs muted">Orientation</div>
+          <h3 class="text-xl font-semibold mt-1">How this system works</h3>
+          <p class="text-sm muted mt-1">A live loop: observe → decide → act (or simulate) → learn → repeat</p>
+        </div>
+        <button id="howModalClose" class="chip px-3 py-2 rounded-xl hover:opacity-90">✕</button>
+      </div>
+
+      <div class="p-5">
+        <div class="grid lg:grid-cols-12 gap-5 items-start">
+          <div class="lg:col-span-8 chip rounded-2xl p-3 overflow-auto">
+            <!-- Inline SVG mental-model diagram -->
+            <svg width="100%" viewBox="0 0 1200 560" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="How the AI Trading Arena works: Observe, Decide, Act or Simulate, Learn, Repeat.">
+              <defs>
+                <linearGradient id="g" x1="120" y1="60" x2="1100" y2="520" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#6366F1" stop-opacity="0.9"/>
+                  <stop offset="1" stop-color="#D946EF" stop-opacity="0.9"/>
+                </linearGradient>
+                <style>
+                  .bg { fill: #060912; }
+                  .panel { fill: rgba(17,24,39,0.72); stroke: rgba(255,255,255,0.10); stroke-width: 1.2; }
+                  .chip { fill: rgba(255,255,255,0.06); stroke: rgba(255,255,255,0.12); stroke-width: 1; }
+                  .title { fill: #E5E7EB; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; font-weight: 700; font-size: 34px; }
+                  .sub { fill: rgba(229,231,235,0.72); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; font-weight: 500; font-size: 16px; }
+                  .h { fill: #E5E7EB; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; font-weight: 700; font-size: 18px; }
+                  .p { fill: rgba(229,231,235,0.72); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; font-weight: 500; font-size: 14px; }
+                  .mono { fill: rgba(229,231,235,0.78); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; }
+                  .arrow { stroke: rgba(255,255,255,0.30); stroke-width: 2; }
+                  .arrow2 { stroke: rgba(255,255,255,0.20); stroke-width: 2; stroke-dasharray: 6 7; }
+                  .accent { stroke: url(#g); stroke-width: 3; }
+                  .accentFill { fill: url(#g); }
+                </style>
+              </defs>
+
+              <rect class="bg" x="0" y="0" width="1200" height="560"/>
+              <rect class="panel" x="36" y="32" width="1128" height="496" rx="26"/>
+
+              <text class="title" x="72" y="92">How This System Works</text>
+              <text class="sub" x="72" y="122">A live loop: observe → decide → act (or simulate) → learn → repeat</text>
+
+              <rect class="chip" x="72" y="160" width="250" height="150" rx="18"/>
+              <circle class="accentFill" cx="104" cy="192" r="10"/>
+              <text class="h" x="124" y="198">1) Observe</text>
+              <text class="p" x="88" y="230">The system reads:</text>
+              <text class="p" x="88" y="254">• Price movement</text>
+              <text class="p" x="88" y="278">• Market open/closed</text>
+              <text class="p" x="88" y="302">• Fresh news headlines</text>
+
+              <rect class="chip" x="362" y="160" width="250" height="150" rx="18"/>
+              <circle class="accentFill" cx="394" cy="192" r="10"/>
+              <text class="h" x="414" y="198">2) Decide</text>
+              <text class="p" x="378" y="230">Four strategies choose:</text>
+              <text class="p" x="378" y="254">BUY / SELL / HOLD</text>
+              <text class="p" x="378" y="278">Each decision includes:</text>
+              <text class="p" x="378" y="302">a short “why” line</text>
+
+              <rect class="chip" x="652" y="160" width="476" height="150" rx="18"/>
+              <circle class="accentFill" cx="684" cy="192" r="10"/>
+              <text class="h" x="704" y="198">3) Act or Simulate</text>
+              <text class="p" x="668" y="230">If markets are open → trades execute.</text>
+              <text class="p" x="668" y="254">If markets are closed → the system simulates decisions</text>
+              <text class="p" x="668" y="278">and continues learning from news without moving capital.</text>
+              <text class="mono" x="668" y="304">Same loop, different mode.</text>
+
+              <rect class="chip" x="72" y="346" width="380" height="150" rx="18"/>
+              <circle class="accentFill" cx="104" cy="378" r="10"/>
+              <text class="h" x="124" y="384">4) Learn</text>
+              <text class="p" x="88" y="416">After time passes, each decision is scored:</text>
+              <text class="p" x="88" y="440">WIN / LOSS / PENDING</text>
+              <text class="p" x="88" y="464">This updates future confidence.</text>
+
+              <rect class="chip" x="492" y="346" width="636" height="150" rx="18"/>
+              <circle class="accentFill" cx="524" cy="378" r="10"/>
+              <text class="h" x="544" y="384">5) Repeat (Autonomous Engine)</text>
+              <text class="p" x="508" y="416">The system rotates symbols continuously and keeps running</text>
+              <text class="p" x="508" y="440">even if you leave the page or it redeploys.</text>
+              <text class="mono" x="508" y="466">You’re observing a living loop, not pressing “run”.</text>
+
+              <path class="arrow" d="M322 235 C340 235 340 235 362 235"/>
+              <path class="arrow" d="M612 235 C630 235 630 235 652 235"/>
+              <path class="arrow2" d="M890 310 C890 330 760 336 640 346"/>
+              <path class="arrow" d="M452 421 C470 421 470 421 492 421"/>
+
+              <path class="accent" d="M1128 496 C1152 430 1140 250 1030 180"/>
+              <path class="accent" d="M1028 180 C870 84 330 88 170 156"/>
+              <path class="accent" d="M170 156 C120 180 96 210 90 230"/>
+
+              <rect class="chip" x="900" y="84" width="230" height="40" rx="14"/>
+              <text class="p" x="914" y="110">Always-on loop (no manual trigger)</text>
+            </svg>
+          </div>
+
+          <div class="lg:col-span-4 space-y-3">
+            <div class="chip rounded-2xl p-4">
+              <div class="text-xs muted">In plain English</div>
+              <div class="mt-2 text-sm">
+                <div><b>1)</b> Bots watch prices + news.</div>
+                <div class="mt-1"><b>2)</b> Each bot chooses BUY/SELL/HOLD.</div>
+                <div class="mt-1"><b>3)</b> After time passes, outcomes update future confidence.</div>
+              </div>
+            </div>
+
+            <div class="chip rounded-2xl p-4">
+              <div class="text-xs muted">Trust statement</div>
+              <div class="mt-2 text-sm">
+                This system learns <b>forward in time</b>. Nothing is backfilled or staged for the UI.
+              </div>
+            </div>
+
+            <div class="chip rounded-2xl p-4">
+              <div class="text-xs muted">Where to look next</div>
+              <div class="mt-2 text-sm muted">
+                Open the War Room to inspect a bot’s full trade history and learning verdicts.
+              </div>
+              <a href="/war-room.html" class="inline-block mt-3 chip px-4 py-2 rounded-xl hover:opacity-90">Go to War Room</a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-5 border-t border-white/10 flex items-center justify-between">
+        <div class="text-xs muted">Tip: press <b>ESC</b> to close</div>
+        <button id="howModalClose2" class="chip px-4 py-2 rounded-xl hover:opacity-90">Close</button>
+      </div>
+    </div>
+  </div>
+
 <script>
 const $ = (id) => document.getElementById(id);
 
@@ -191,6 +337,31 @@ async function getJSON(url){
   return JSON.parse(t);
 }
 
+/* -----------------------------
+   Modal controls
+------------------------------ */
+function openHowModal(){
+  $("howModalOverlay").classList.remove("hidden");
+  $("howModal").classList.remove("hidden");
+  document.body.classList.add("overflow-hidden");
+}
+function closeHowModal(){
+  $("howModalOverlay").classList.add("hidden");
+  $("howModal").classList.add("hidden");
+  document.body.classList.remove("overflow-hidden");
+}
+
+$("howItWorksBtn").addEventListener("click", openHowModal);
+$("howModalOverlay").addEventListener("click", closeHowModal);
+$("howModalClose").addEventListener("click", closeHowModal);
+$("howModalClose2").addEventListener("click", closeHowModal);
+document.addEventListener("keydown", (e) => {
+  if(e.key === "Escape") closeHowModal();
+});
+
+/* -----------------------------
+   WebSocket live loop
+------------------------------ */
 function connectWS(){
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
