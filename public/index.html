@@ -1,12 +1,11 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>AI Trading Arena</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
   <style>
     body{
@@ -53,143 +52,32 @@
       <div>
         <h1 class="text-4xl font-bold tracking-tight">AI Trading Arena</h1>
         <p class="mt-2 muted max-w-2xl">
-          Autonomous trading intelligence. Four bots. Continuous learning.
-          <span class="block mt-1">Live-by-default: the engine runs continuously.</span>
+          General news → impacted tickers, with audit-grade evidence. This experience is designed to “show the research.”
         </p>
       </div>
       <div class="flex items-center gap-3">
-        <button id="howItWorksBtn" class="chip px-4 py-2 rounded-xl hover:opacity-90">❓ How it works</button>
-        <a href="/war-room.html" class="chip px-4 py-2 rounded-xl hover:opacity-90">⚔️ War Room</a>
-        <span id="wsStatus" class="chip px-3 py-2 rounded-xl text-xs muted">WS: connecting…</span>
+        <span id="apiChip" class="chip px-3 py-2 rounded-xl text-xs muted">API: —</span>
+        <span id="wsStatus" class="chip px-3 py-2 rounded-xl text-xs muted">WS: —</span>
       </div>
     </div>
 
-    <!-- LIVE STATUS BAR -->
-    <div class="glass mt-8 rounded-2xl p-5">
-      <div class="grid md:grid-cols-4 gap-4">
+    <!-- News Intelligence -->
+    <div class="glass mt-8 rounded-2xl p-6">
+      <div class="flex items-center justify-between gap-4">
         <div>
-          <div class="text-xs muted">Current Symbol</div>
-          <div id="liveSymbol" class="text-2xl font-bold mt-1">—</div>
+          <h2 class="text-xl font-semibold">News Intelligence</h2>
+          <p class="text-sm muted mt-1">Click a headline to see impacted US-traded stocks + an Evidence Drawer.</p>
         </div>
-        <div>
-          <div class="text-xs muted">Market State</div>
-          <div id="marketState" class="text-lg font-semibold mt-1">—</div>
-        </div>
-        <div>
-          <div class="text-xs muted">Last Event</div>
-          <div id="lastEvent" class="text-sm mt-2 muted">—</div>
-        </div>
-        <div>
-          <div class="text-xs muted">Mode</div>
-          <div id="modeBox" class="text-lg font-semibold mt-1">—</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- MAIN GRID -->
-    <div class="grid lg:grid-cols-12 gap-6 mt-8">
-
-      <!-- LEFT: BOT DECISIONS -->
-      <div class="lg:col-span-7 glass rounded-2xl p-6">
-        <div class="flex items-center justify-between">
-          <h2 class="text-xl font-semibold">Latest Bot Decisions</h2>
-          <span class="chip px-3 py-1 rounded-lg text-xs muted">Auto-updated</span>
-        </div>
-
-        <div class="grid sm:grid-cols-3 gap-4 mt-5">
-          <div class="chip rounded-2xl p-4">
-            <div class="text-xs muted">Price</div>
-            <div id="priceBox" class="text-2xl font-bold mt-1">—</div>
-          </div>
-          <div class="chip rounded-2xl p-4">
-            <div class="text-xs muted">Change %</div>
-            <div id="chgBox" class="text-2xl font-bold mt-1">—</div>
-          </div>
-          <div class="chip rounded-2xl p-4">
-            <div class="text-xs muted">Avg News Sentiment</div>
-            <div id="sentBox" class="text-2xl font-bold mt-1">—</div>
-          </div>
-        </div>
-
-        <div class="mt-5 chip rounded-2xl p-4">
-          <div class="text-xs muted">Winning Strategy</div>
-          <div id="winnerBox" class="text-lg font-semibold mt-1">—</div>
-          <div id="marketDetail" class="text-xs muted mt-2">—</div>
-        </div>
-
-        <div class="mt-6">
-          <h3 class="font-semibold">Bot Signals</h3>
-          <div id="botsList" class="mt-3 grid sm:grid-cols-2 gap-3"></div>
-        </div>
+        <span id="newsProviderBadge" class="chip px-3 py-1 rounded-lg text-xs muted">Provider: —</span>
       </div>
 
-      <!-- RIGHT: NEWS INTELLIGENCE -->
-      <div class="lg:col-span-5 glass rounded-2xl p-6">
-        <div class="flex items-center justify-between">
-          <div>
-            <h2 class="text-xl font-semibold">News Intelligence</h2>
-            <p class="text-sm muted mt-1">Regular news → which US-traded stocks may be impacted</p>
-          </div>
-          <span id="newsProviderBadge" class="chip px-3 py-1 rounded-lg text-xs muted">Provider: —</span>
-        </div>
-
-        <div id="newsBox" class="mt-4 space-y-3">
-          <div class="muted">Loading general news…</div>
-        </div>
-      </div>
-
-      <!-- FULL WIDTH: LEARNING IMPACT -->
-      <div class="lg:col-span-12 glass rounded-2xl p-6">
-        <div class="flex items-center justify-between">
-          <div>
-            <h2 class="text-xl font-semibold">Learning Impact</h2>
-            <p class="text-sm muted mt-1">Evaluated decisions (WIN/LOSS) shift bot confidence over time.</p>
-          </div>
-          <span class="chip px-3 py-1 rounded-lg text-xs muted" id="learningMeta">Loading…</span>
-        </div>
-
-        <div class="mt-4 chip rounded-2xl p-4">
-          <canvas id="learningChart" height="90"></canvas>
-        </div>
-
-        <div class="mt-3 text-xs muted">
-          Accuracy is calculated from evaluated learning samples (PENDING excluded). Forward-time evaluation, not backfilled.
-        </div>
-      </div>
-    </div>
-
-  </div>
-
-  <!-- How it works modal (kept simple here) -->
-  <div id="howModalOverlay" class="hidden fixed inset-0 modal-bg"></div>
-  <div id="howModal" class="hidden fixed inset-0 flex items-center justify-center p-5">
-    <div class="modal w-full max-w-4xl rounded-3xl overflow-hidden">
-      <div class="flex items-start justify-between gap-4 p-5 border-b border-white/10">
-        <div>
-          <div class="text-xs muted">Orientation</div>
-          <h3 class="text-xl font-semibold mt-1">How this system works</h3>
-          <p class="text-sm muted mt-1">Observe → Decide → Act (or Simulate) → Learn → Repeat</p>
-        </div>
-        <button id="howModalClose" class="chip px-3 py-2 rounded-xl hover:opacity-90">✕</button>
-      </div>
-      <div class="p-5">
-        <div class="chip rounded-2xl p-4">
-          <div class="text-sm">
-            Bots observe prices + news, make decisions, and learning evaluates outcomes after time passes to refine confidence.
-          </div>
-          <div class="text-xs muted mt-2">
-            This is forward-time learning: decisions are scored later (WIN/LOSS/PENDING), then reused.
-          </div>
-        </div>
-      </div>
-      <div class="p-5 border-t border-white/10 flex items-center justify-between">
-        <div class="text-xs muted">Tip: press <b>ESC</b> to close</div>
-        <button id="howModalClose2" class="chip px-4 py-2 rounded-xl hover:opacity-90">Close</button>
+      <div id="newsBox" class="mt-4 space-y-3">
+        <div class="muted">Loading…</div>
       </div>
     </div>
   </div>
 
-  <!-- Article → Impact modal -->
+  <!-- Article -> Impact Modal -->
   <div id="articleModal" class="hidden fixed inset-0 modal-bg">
     <div class="modal max-w-3xl mx-auto mt-14 rounded-3xl overflow-hidden">
       <div class="flex items-start justify-between gap-4 p-5 border-b border-white/10">
@@ -206,7 +94,50 @@
         <div id="impactList" class="mt-3 space-y-2">
           <div class="muted">Loading…</div>
         </div>
-        <div class="text-xs muted mt-4" id="impactProvider">—</div>
+
+        <div class="mt-4 flex items-center justify-between gap-3">
+          <div class="text-xs muted" id="impactProvider">—</div>
+          <button id="toggleEvidence" class="chip px-4 py-2 rounded-xl hover:opacity-90 text-sm">
+            🔎 Evidence Drawer
+          </button>
+        </div>
+
+        <!-- Evidence Drawer -->
+        <div id="evidenceDrawer" class="hidden mt-4 chip rounded-2xl p-4">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <div class="text-sm font-semibold">Evidence</div>
+              <div class="text-xs muted mt-1">What the system matched, and where the output came from.</div>
+            </div>
+            <button id="hideEvidence" class="chip px-3 py-2 rounded-xl hover:opacity-90 text-xs">Hide</button>
+          </div>
+
+          <div class="mt-4 space-y-3">
+            <div>
+              <div class="text-xs muted">Provider</div>
+              <div id="evidenceProvider" class="text-sm mt-1">—</div>
+            </div>
+
+            <div>
+              <div class="text-xs muted">Matched buckets</div>
+              <div id="evidenceBuckets" class="mt-2 flex flex-wrap gap-2"></div>
+            </div>
+
+            <div>
+              <div class="text-xs muted">Matched keywords</div>
+              <div id="evidenceKeywords" class="mt-2 flex flex-wrap gap-2"></div>
+            </div>
+
+            <div id="aiNotesWrap" class="hidden">
+              <div class="text-xs muted">AI notes</div>
+              <div id="aiNotes" class="text-sm mt-1 muted">—</div>
+            </div>
+
+            <div class="text-xs muted">
+              Governance: Evidence is intentionally displayed so the user can validate plausibility and avoid “black box” trust.
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="p-5 border-t border-white/10 flex items-center justify-end">
@@ -218,27 +149,13 @@
 <script>
 const $ = (id) => document.getElementById(id);
 
-let currentSymbol = null;
-let ws = null;
+function setWsStatus(t){ $("wsStatus").textContent = t; }
 
-// -----------------------------
-// Modal controls
-// -----------------------------
-function openHowModal(){
-  $("howModalOverlay").classList.remove("hidden");
-  $("howModal").classList.remove("hidden");
-  document.body.classList.add("overflow-hidden");
+async function getJSON(url, opts){
+  const r = await fetch(url, opts);
+  const t = await r.text();
+  return JSON.parse(t);
 }
-function closeHowModal(){
-  $("howModalOverlay").classList.add("hidden");
-  $("howModal").classList.add("hidden");
-  document.body.classList.remove("overflow-hidden");
-}
-$("howItWorksBtn").addEventListener("click", openHowModal);
-$("howModalOverlay").addEventListener("click", closeHowModal);
-$("howModalClose").addEventListener("click", closeHowModal);
-$("howModalClose2").addEventListener("click", closeHowModal);
-document.addEventListener("keydown", (e) => { if(e.key === "Escape") { closeHowModal(); closeArticleModal(); } });
 
 function openArticleModal(){
   $("articleModal").classList.remove("hidden");
@@ -247,61 +164,91 @@ function openArticleModal(){
 function closeArticleModal(){
   $("articleModal").classList.add("hidden");
   document.body.classList.remove("overflow-hidden");
+  // reset drawer state
+  $("evidenceDrawer").classList.add("hidden");
 }
 $("closeArticle").addEventListener("click", closeArticleModal);
 $("closeArticle2").addEventListener("click", closeArticleModal);
 $("articleModal").addEventListener("click", (e) => { if(e.target === $("articleModal")) closeArticleModal(); });
 
-// -----------------------------
-// Helpers
-// -----------------------------
-async function getJSON(url, opts){
-  const r = await fetch(url, opts);
-  const t = await r.text();
-  return JSON.parse(t);
+function pillClass(direction){
+  if(direction === "benefit") return "pill-good";
+  if(direction === "risk") return "pill-bad";
+  return "pill-mix";
 }
-function setWsStatus(t){ $("wsStatus").textContent = t; }
 
-function renderBots(bots){
-  const box = $("botsList");
-  box.innerHTML = "";
-  for(const b of (bots || [])){
-    const d = document.createElement("div");
-    d.className = "chip rounded-2xl p-4";
-    d.innerHTML = `
-      <div class="flex items-center justify-between">
-        <div class="font-semibold">${b.label || b.strategy}</div>
-        <div class="text-xs muted">${b.horizon || ""}</div>
-      </div>
-      <div class="mt-2 text-sm">
-        <span class="font-semibold">${b.signal}</span>
-        <span class="muted">• confidence ${b.confidence}</span>
-      </div>
-      <div class="mt-2 text-xs muted">${b.rationale || ""}</div>
-    `;
-    box.appendChild(d);
+function chipList(el, items){
+  el.innerHTML = "";
+  const arr = (items || []).slice(0, 40);
+  if(!arr.length){
+    el.innerHTML = `<span class="muted text-sm">—</span>`;
+    return;
+  }
+  for(const t of arr){
+    const s = document.createElement("span");
+    s.className = "chip px-3 py-1 rounded-full text-xs muted";
+    s.textContent = t;
+    el.appendChild(s);
   }
 }
 
-// -----------------------------
-// News Intelligence (general news + article→stocks impact)
-// -----------------------------
-function renderNews(pack){
-  const box = $("newsBox");
-  $("newsProviderBadge").textContent = `Provider: ${pack?.provider || "—"}`;
+function renderEvidence(evidence){
+  if(!evidence){
+    $("evidenceProvider").textContent = "—";
+    chipList($("evidenceBuckets"), []);
+    chipList($("evidenceKeywords"), []);
+    $("aiNotesWrap").classList.add("hidden");
+    return;
+  }
 
+  // provider can be "heuristic" or "openai"
+  if(evidence.provider === "openai"){
+    $("evidenceProvider").textContent = "OpenAI (ranked) + Heuristic (audit trail)";
+    const h = evidence.heuristicEvidence || {};
+    chipList($("evidenceBuckets"), h.matchedBuckets || []);
+    chipList($("evidenceKeywords"), h.matchedKeywords || []);
+    const notes = evidence.aiEvidence?.notes || "";
+    if(notes){
+      $("aiNotesWrap").classList.remove("hidden");
+      $("aiNotes").textContent = notes;
+    } else {
+      $("aiNotesWrap").classList.add("hidden");
+    }
+  } else {
+    $("evidenceProvider").textContent = "Heuristic mapping (transparent rules)";
+    chipList($("evidenceBuckets"), evidence.matchedBuckets || []);
+    chipList($("evidenceKeywords"), evidence.matchedKeywords || []);
+    $("aiNotesWrap").classList.add("hidden");
+  }
+}
+
+$("toggleEvidence").addEventListener("click", () => {
+  $("evidenceDrawer").classList.toggle("hidden");
+});
+$("hideEvidence").addEventListener("click", () => {
+  $("evidenceDrawer").classList.add("hidden");
+});
+
+async function loadDiagnostics(){
+  const health = await getJSON("/api/health");
+  $("apiChip").textContent = `API: ${JSON.stringify(health.apis)}`;
+}
+
+function renderNews(pack){
+  $("newsProviderBadge").textContent = `Provider: ${pack?.provider || "—"}`;
+  const box = $("newsBox");
   const items = pack?.items || [];
   if(!items.length){
-    box.innerHTML = `<div class="muted">No headlines available</div>`;
+    box.innerHTML = `<div class="muted">No headlines available.</div>`;
     return;
   }
 
   box.innerHTML = items.map((n, idx) => `
     <button data-idx="${idx}" class="w-full text-left chip rounded-2xl p-4 hover:opacity-90">
-      <div class="text-sm font-semibold">${n.title}</div>
-      <div class="text-xs muted mt-1">${n.source} • ${n.publishedAt ? new Date(n.publishedAt).toLocaleString() : ""}</div>
+      <div class="text-sm font-semibold">${n.title || ""}</div>
+      <div class="text-xs muted mt-1">${n.source || ""} • ${n.publishedAt ? new Date(n.publishedAt).toLocaleString() : ""}</div>
       <div class="text-xs muted mt-2">${n.summary || ""}</div>
-      <div class="text-xs muted mt-2">Click to see impacted stocks →</div>
+      <div class="text-xs muted mt-2">Click to see impacted stocks + evidence →</div>
     </button>
   `).join("");
 
@@ -314,6 +261,7 @@ function renderNews(pack){
       $("articleMeta").textContent = `${article.source || ""} • ${article.publishedAt ? new Date(article.publishedAt).toLocaleString() : ""}`;
       $("impactList").innerHTML = `<div class="muted">Analyzing…</div>`;
       $("impactProvider").textContent = "—";
+      renderEvidence(null);
       openArticleModal();
 
       try {
@@ -326,26 +274,25 @@ function renderNews(pack){
         const itemsOut = out.items || [];
         if(!itemsOut.length){
           $("impactList").innerHTML = `<div class="muted">No confident impacted tickers detected for this headline.</div>`;
-          $("impactProvider").textContent = `Provider: ${out.provider || "—"}`;
+          $("impactProvider").textContent = `Provider: ${out.evidence?.provider || out.provider || "—"}`;
+          renderEvidence(out.evidence || null);
           return;
         }
 
-        $("impactList").innerHTML = itemsOut.map(x => {
-          const pill = x.direction === "benefit" ? "pill-good" : x.direction === "risk" ? "pill-bad" : "pill-mix";
-          return `
-            <div class="chip rounded-2xl p-4">
-              <div class="flex items-center justify-between gap-3">
-                <div class="font-semibold">${x.ticker} <span class="muted font-normal">• ${x.company || ""}</span></div>
-                <div class="text-xs px-3 py-1 rounded-full ${pill}">
-                  ${x.direction.toUpperCase()} • ${x.horizon} • ${x.confidence}%
-                </div>
+        $("impactList").innerHTML = itemsOut.map(x => `
+          <div class="chip rounded-2xl p-4">
+            <div class="flex items-center justify-between gap-3">
+              <div class="font-semibold">${x.ticker} <span class="muted font-normal">• ${x.company || ""}</span></div>
+              <div class="text-xs px-3 py-1 rounded-full ${pillClass(x.direction)}">
+                ${(x.direction || "mixed").toUpperCase()} • ${(x.horizon || "medium")} • ${Number(x.confidence || 0)}%
               </div>
-              <div class="text-xs muted mt-2">${x.why || ""}</div>
             </div>
-          `;
-        }).join("");
+            <div class="text-xs muted mt-2">${x.why || ""}</div>
+          </div>
+        `).join("");
 
-        $("impactProvider").textContent = `Provider: ${out.provider || "—"} • Note: this is causal inference from the headline/summary.`;
+        $("impactProvider").textContent = `Provider: ${out.evidence?.provider || "—"} • Evidence available via drawer.`;
+        renderEvidence(out.evidence || null);
       } catch(e){
         $("impactList").innerHTML = `<div class="muted">Impact analysis failed. Check server logs.</div>`;
       }
@@ -354,129 +301,25 @@ function renderNews(pack){
 }
 
 async function loadGeneralNews(){
-  const pack = await getJSON("/api/news/general?limit=8");
+  const pack = await getJSON("/api/news/general?limit=10");
   renderNews(pack);
-}
-
-// -----------------------------
-// Learning impact chart
-// -----------------------------
-let learningChart = null;
-
-function destroyChart(ch){ try{ if(ch) ch.destroy(); }catch{} return null; }
-
-function buildSeriesToDatasets(byStrategy){
-  const datasets = [];
-  const allDays = new Set();
-  Object.keys(byStrategy || {}).forEach(k => (byStrategy[k] || []).forEach(pt => { if(pt.day) allDays.add(pt.day); }));
-  const labels = Array.from(allDays).sort();
-
-  for(const strategyKey of Object.keys(byStrategy || {})){
-    const map = new Map((byStrategy[strategyKey] || []).map(pt => [pt.day, pt.accuracy]));
-    const data = labels.map(day => {
-      const v = map.get(day);
-      return (v === null || v === undefined) ? null : Number(v.toFixed(2));
-    });
-    datasets.push({ label: String(strategyKey), data, spanGaps: true, tension: 0.25, borderWidth: 2, pointRadius: 2 });
-  }
-  return { labels, datasets };
-}
-
-async function refreshLearningImpact(){
-  const out = await getJSON("/api/learning/impact?days=14");
-  const byStrategy = out.byStrategy || {};
-  const { labels, datasets } = buildSeriesToDatasets(byStrategy);
-
-  const evaluatedTotal = Object.values(byStrategy).flat().reduce((acc, pt) => acc + Number(pt.evaluated || 0), 0);
-  $("learningMeta").textContent = `Last ${out.days || 14} days • Evaluated samples: ${evaluatedTotal}`;
-
-  learningChart = destroyChart(learningChart);
-  learningChart = new Chart($("learningChart").getContext("2d"), {
-    type: "line",
-    data: { labels, datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { labels: { color: "rgba(229,231,235,0.78)" } },
-        tooltip: { intersect: false, mode: "index" }
-      },
-      scales: {
-        x: { ticks: { color: "rgba(229,231,235,0.55)" }, grid: { color: "rgba(255,255,255,0.06)" } },
-        y: {
-          suggestedMin: 0,
-          suggestedMax: 100,
-          ticks: { color: "rgba(229,231,235,0.55)", callback: (v) => `${v}%` },
-          grid: { color: "rgba(255,255,255,0.06)" }
-        }
-      }
-    }
-  });
-}
-
-// -----------------------------
-// WebSocket live loop + instant hydration
-// -----------------------------
-async function hydrateFromRunnerStatus(){
-  try {
-    const r = await getJSON("/api/runner/status");
-    const sym = r.state?.lastSymbol || "AAPL";
-    currentSymbol = sym;
-    $("liveSymbol").textContent = sym;
-    $("marketState").textContent = r.market.open ? "OPEN" : r.market.reason;
-    $("modeBox").textContent = r.market.open ? "Live trading" : "News-only learning";
-  } catch {}
 }
 
 function connectWS(){
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
-
+  const ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.onopen = () => setWsStatus("WS: live ✅");
   ws.onclose = () => setWsStatus("WS: closed ⚠️");
   ws.onerror = () => setWsStatus("WS: error ⚠️");
-
-  ws.onmessage = async (ev) => {
-    const msg = JSON.parse(ev.data);
-    $("lastEvent").textContent = `${msg.type} • ${new Date(msg.ts).toLocaleTimeString()}`;
-
-    if(msg.type === "carousel_tick"){
-      currentSymbol = msg.payload.symbol;
-      $("liveSymbol").textContent = currentSymbol;
-      $("marketState").textContent = msg.payload.market.open ? "OPEN" : msg.payload.market.reason;
-      $("modeBox").textContent = msg.payload.market.open ? "Live trading" : "News-only learning";
-    }
-
-    if(msg.type === "bot_fight"){
-      const f = msg.payload.features || {};
-      $("priceBox").textContent = f.price ? `$${Number(f.price).toFixed(2)}` : "—";
-      $("chgBox").textContent = f.changePercent !== undefined ? `${Number(f.changePercent).toFixed(2)}%` : "—";
-      $("sentBox").textContent = f.avgSent !== undefined ? Number(f.avgSent).toFixed(2) : "—";
-      $("winnerBox").textContent = msg.payload.winner || "—";
-      $("marketDetail").textContent =
-        `Market: ${msg.payload.market.open ? "OPEN" : "CLOSED"} • Trades: ${msg.payload.tradesAllowed ? "YES" : "NO"}`;
-
-      renderBots(msg.payload.bots || []);
-    }
-
-    if(msg.type === "learning_evaluated"){
-      refreshLearningImpact().catch(()=>{});
-    }
-  };
+  return ws;
 }
 
-// Boot
 (async function init(){
-  await hydrateFromRunnerStatus();
-  await loadGeneralNews();
-  await refreshLearningImpact().catch(()=>{});
+  await loadDiagnostics().catch(()=>{});
+  await loadGeneralNews().catch(()=>{});
   connectWS();
-
-  // keep news fresh every 90 seconds
   setInterval(() => loadGeneralNews().catch(()=>{}), 90000);
-  setInterval(() => refreshLearningImpact().catch(()=>{}), 60000);
 })();
 </script>
-
 </body>
 </html>
