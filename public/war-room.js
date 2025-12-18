@@ -23,6 +23,9 @@ function pushEventLine(text) {
   while (box.children.length > 80) box.removeChild(box.lastChild);
 }
 
+/* -----------------------------
+   Trades Stream (main table)
+------------------------------ */
 function renderTrades(items) {
   const tb = $("tradeStreamBody");
   if (!items || !items.length) {
@@ -42,6 +45,9 @@ function renderTrades(items) {
   `).join("");
 }
 
+/* -----------------------------
+   Bankrolls (clickable cards)
+------------------------------ */
 function renderBankroll(items) {
   const box = $("bankrollBox");
   if (!items || !items.length) {
@@ -53,8 +59,14 @@ function renderBankroll(items) {
     const cash = Number(p.cash);
     const goal = Number(p.goal);
     const pct = Math.max(0, Math.min(100, (cash / goal) * 100));
+
+    // IMPORTANT: clickable button + data attributes
     return `
-      <div class="chip rounded-2xl p-4">
+      <button
+        class="chip w-full text-left rounded-2xl p-4 hover:opacity-95 focus:outline-none"
+        data-bot="${p.bot}"
+        data-label="${p.bot}"
+      >
         <div class="flex items-center justify-between">
           <div class="font-semibold">${p.bot}</div>
           <div class="text-xs muted">$${cash.toFixed(2)}</div>
@@ -63,11 +75,23 @@ function renderBankroll(items) {
           <div style="width:${pct}%" class="h-2 bg-gradient-to-r from-indigo-500 to-fuchsia-500"></div>
         </div>
         <div class="mt-2 text-xs muted">Progress to $${goal.toFixed(0)} • ${pct.toFixed(1)}%</div>
-      </div>
+      </button>
     `;
   }).join("");
+
+  // Wire clicks after render
+  box.querySelectorAll("button[data-bot]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const bot = btn.getAttribute("data-bot");
+      const label = btn.getAttribute("data-label") || bot;
+      openBotDrawer(bot, label).catch(() => {});
+    });
+  });
 }
 
+/* -----------------------------
+   Runner Panel
+------------------------------ */
 async function refreshWarRoom() {
   const p = await getJSON("/api/portfolios");
   renderBankroll(p.items || []);
@@ -87,6 +111,156 @@ async function refreshWarRoom() {
   `;
 }
 
+/* -----------------------------
+   Bot Drawer (Phase 3)
+------------------------------ */
+let drawerOpen = false;
+let activeDrawerBot = null;
+let activeDrawerLabel = null;
+
+function showDrawer() {
+  drawerOpen = true;
+  $("drawerOverlay").classList.remove("hidden");
+  $("botDrawer").classList.remove("hidden");
+  document.body.classList.add("overflow-hidden");
+}
+function hideDrawer() {
+  drawerOpen = false;
+  activeDrawerBot = null;
+  activeDrawerLabel = null;
+  $("drawerOverlay").classList.add("hidden");
+  $("botDrawer").classList.add("hidden");
+  document.body.classList.remove("overflow-hidden");
+}
+
+function verdictChip(v) {
+  const vv = String(v || "PENDING").toUpperCase();
+  if (vv === "WIN") return `<span class="chip px-2 py-1 rounded-lg text-xs">WIN</span>`;
+  if (vv === "LOSS") return `<span class="chip px-2 py-1 rounded-lg text-xs">LOSS</span>`;
+  return `<span class="chip px-2 py-1 rounded-lg text-xs">PENDING</span>`;
+}
+
+/**
+ * Optional verdicts endpoint (added later in Phase 4 server.js)
+ * - If endpoint doesn't exist or fails: gracefully fallback to PENDING.
+ *
+ * Expected shape (if exists):
+ * {
+ *   bot: "sp500_long",
+ *   verdictByTradeId: { "123": "WIN", "124": "PENDING" },
+ *   stats: { win: 10, loss: 7, pending: 4 }
+ * }
+ */
+async function loadVerdictsForBot(bot) {
+  try {
+    const out = await getJSON(`/api/learning/verdicts?bot=${encodeURIComponent(bot)}`);
+    if (!out || typeof out !== "object") return { verdictByTradeId: {}, stats: null };
+    return {
+      verdictByTradeId: out.verdictByTradeId || {},
+      stats: out.stats || null
+    };
+  } catch {
+    return { verdictByTradeId: {}, stats: null };
+  }
+}
+
+async function loadBotPortfolio(bot) {
+  try {
+    const p = await getJSON("/api/portfolios");
+    const items = p.items || [];
+    return items.find(x => x.bot === bot) || null;
+  } catch {
+    return null;
+  }
+}
+
+function renderDrawerHeader({ bot, label, portfolio, tradesCount, stats }) {
+  $("drawerTitle").textContent = label || bot;
+  $("drawerSub").textContent = bot ? `Strategy key: ${bot}` : "—";
+
+  if (portfolio) {
+    $("drawerCash").textContent = `$${Number(portfolio.cash || 0).toFixed(2)}`;
+  } else {
+    $("drawerCash").textContent = "—";
+  }
+
+  $("drawerTradesCount").textContent = String(tradesCount ?? "—");
+
+  if (stats && (stats.win + stats.loss + stats.pending) > 0) {
+    const denom = (stats.win + stats.loss);
+    const wr = denom > 0 ? Math.round((stats.win / denom) * 100) : null;
+    $("drawerWinRate").textContent = (wr === null) ? "—" : `${wr}%`;
+  } else {
+    $("drawerWinRate").textContent = "—";
+  }
+}
+
+function renderDrawerTrades(items, verdictByTradeId) {
+  const tb = $("drawerTradesBody");
+  if (!items || !items.length) {
+    tb.innerHTML = `<tr class="muted"><td class="py-3" colspan="7">No trades yet.</td></tr>`;
+    return;
+  }
+
+  tb.innerHTML = items.map(t => {
+    const v = (verdictByTradeId && t.id != null) ? verdictByTradeId[String(t.id)] : null;
+    const why = (t.rationale || "").slice(0, 170);
+    return `
+      <tr class="border-t border-white/5">
+        <td class="py-2 pr-3 muted">${new Date(t.ts).toLocaleString()}</td>
+        <td class="py-2 pr-3">${t.side}</td>
+        <td class="py-2 pr-3">${t.symbol}</td>
+        <td class="py-2 pr-3">${Number(t.qty || 0).toFixed(3)}</td>
+        <td class="py-2 pr-3">$${Number(t.price || 0).toFixed(2)}</td>
+        <td class="py-2 pr-3 muted">${verdictChip(v)}</td>
+        <td class="py-2 muted">${why}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
+async function openBotDrawer(bot, label) {
+  activeDrawerBot = bot;
+  activeDrawerLabel = label;
+
+  // Open immediately (perceived performance)
+  showDrawer();
+
+  $("drawerTitle").textContent = label || bot;
+  $("drawerSub").textContent = "Loading bot intelligence…";
+  $("drawerCash").textContent = "—";
+  $("drawerWinRate").textContent = "—";
+  $("drawerTradesCount").textContent = "—";
+  $("drawerLastUpdated").textContent = "—";
+  $("drawerTradesBody").innerHTML = `<tr class="muted"><td class="py-3" colspan="7">Loading…</td></tr>`;
+
+  // Fetch portfolio + trades + (optional) verdicts
+  const [portfolio, tradesOut, verdictsOut] = await Promise.all([
+    loadBotPortfolio(bot),
+    getJSON(`/api/trades/bot/${encodeURIComponent(bot)}?limit=250`).catch(() => ({ items: [] })),
+    loadVerdictsForBot(bot)
+  ]);
+
+  const items = (tradesOut && tradesOut.items) ? tradesOut.items : [];
+  const verdictByTradeId = verdictsOut.verdictByTradeId || {};
+  const stats = verdictsOut.stats || null;
+
+  renderDrawerHeader({
+    bot,
+    label,
+    portfolio,
+    tradesCount: items.length,
+    stats
+  });
+
+  $("drawerSub").textContent = "Full trade history + learning verdicts (when available)";
+  $("drawerLastUpdated").textContent = `Updated: ${new Date().toLocaleTimeString()}`;
+  renderDrawerTrades(items, verdictByTradeId);
+}
+
+/* -----------------------------
+   WebSocket
+------------------------------ */
 function connectWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -111,11 +285,23 @@ function connectWS() {
         const winner = msg.payload?.winner;
         const allowed = msg.payload?.tradesAllowed;
         pushEventLine(`⚔️ Fight: ${sym} • winner=${winner} • trades=${allowed ? "YES" : "NO"}`);
+
+        // Refresh core panels
         await refreshWarRoom();
+
+        // If drawer is open, refresh its content to stay “command-center live”
+        if (drawerOpen && activeDrawerBot) {
+          openBotDrawer(activeDrawerBot, activeDrawerLabel).catch(() => {});
+        }
       }
 
       if (msg.type === "learning_evaluated") {
         pushEventLine(`🧠 Learning evaluated: ${msg.payload?.evaluated || 0} samples`);
+
+        // If drawer is open, attempt to refresh verdicts (endpoint may be added later)
+        if (drawerOpen && activeDrawerBot) {
+          openBotDrawer(activeDrawerBot, activeDrawerLabel).catch(() => {});
+        }
       }
     } catch {}
   };
@@ -123,8 +309,29 @@ function connectWS() {
   return ws;
 }
 
+/* -----------------------------
+   Drawer close handlers
+------------------------------ */
+function wireDrawerControls() {
+  const overlay = $("drawerOverlay");
+  const closeBtn = $("drawerClose");
+
+  overlay.addEventListener("click", () => hideDrawer());
+  closeBtn.addEventListener("click", () => hideDrawer());
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && drawerOpen) hideDrawer();
+  });
+}
+
+/* -----------------------------
+   Init
+------------------------------ */
 (async function init() {
+  wireDrawerControls();
   await refreshWarRoom();
   connectWS();
+
+  // REST fallback refresh cadence (WS is primary)
   setInterval(() => refreshWarRoom().catch(() => {}), 15000);
 })();
