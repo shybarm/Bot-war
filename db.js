@@ -13,7 +13,6 @@ export function getPool() {
 
   pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    // Railway Postgres typically needs SSL in production containers
     ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
   });
 
@@ -27,7 +26,48 @@ export async function initDb() {
     return;
   }
 
-  // Learning events (persistent outcomes)
+  // Bots bankroll
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS bot_accounts (
+      strategy TEXT PRIMARY KEY,
+      cash DOUBLE PRECISION NOT NULL DEFAULT 100000,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // Positions
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS bot_positions (
+      id BIGSERIAL PRIMARY KEY,
+      strategy TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      qty DOUBLE PRECISION NOT NULL DEFAULT 0,
+      avg_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(strategy, symbol)
+    );
+  `);
+
+  // Trades ledger
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS trades (
+      id BIGSERIAL PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      strategy TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL, -- BUY | SELL
+      qty DOUBLE PRECISION NOT NULL,
+      price DOUBLE PRECISION NOT NULL,
+      note TEXT NOT NULL DEFAULT ''
+    );
+  `);
+
+  await p.query(`CREATE INDEX IF NOT EXISTS idx_trades_created ON trades(created_at DESC);`);
+  await p.query(`CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol, created_at DESC);`);
+  await p.query(`CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy, created_at DESC);`);
+
+  // Learning events (impact over time)
   await p.query(`
     CREATE TABLE IF NOT EXISTS learning_events (
       id BIGSERIAL PRIMARY KEY,
@@ -52,8 +92,146 @@ export async function initDb() {
     ON learning_events(strategy, created_at DESC);
   `);
 
-  console.log("✅ Database initialized (tables ready)");
+  // Ensure 4 bots exist
+  const bots = ["sp500_long", "market_swing", "day_trade", "news_only"];
+  for (const b of bots) {
+    await p.query(
+      `INSERT INTO bot_accounts(strategy, cash) VALUES ($1, 100000)
+       ON CONFLICT(strategy) DO NOTHING;`,
+      [b]
+    );
+  }
+
+  console.log("✅ DB ready (bot_accounts, bot_positions, trades, learning_events)");
 }
+
+// ---- Accounts / Positions / Trades ----
+
+export async function getBotAccounts() {
+  const p = getPool();
+  if (!p) return [
+    { strategy: "sp500_long", cash: 100000 },
+    { strategy: "market_swing", cash: 100000 },
+    { strategy: "day_trade", cash: 100000 },
+    { strategy: "news_only", cash: 100000 }
+  ];
+
+  const r = await p.query(`SELECT strategy, cash FROM bot_accounts ORDER BY strategy ASC;`);
+  return r.rows;
+}
+
+export async function getBotPositions(strategy) {
+  const p = getPool();
+  if (!p) return [];
+  const r = await p.query(
+    `SELECT symbol, qty, avg_cost FROM bot_positions WHERE strategy=$1 ORDER BY symbol ASC;`,
+    [strategy]
+  );
+  return r.rows.map(x => ({ symbol: x.symbol, qty: Number(x.qty), avgCost: Number(x.avg_cost) }));
+}
+
+async function updateCash(p, strategy, delta) {
+  await p.query(
+    `UPDATE bot_accounts SET cash = cash + $2, updated_at=NOW() WHERE strategy=$1;`,
+    [strategy, delta]
+  );
+}
+
+async function upsertPosition(p, strategy, symbol, qtyDelta, price) {
+  const existing = await p.query(
+    `SELECT qty, avg_cost FROM bot_positions WHERE strategy=$1 AND symbol=$2;`,
+    [strategy, symbol]
+  );
+
+  if (existing.rows.length === 0) {
+    const newQty = qtyDelta;
+    const avgCost = qtyDelta > 0 ? price : 0;
+    await p.query(
+      `INSERT INTO bot_positions(strategy, symbol, qty, avg_cost, updated_at)
+       VALUES ($1,$2,$3,$4,NOW())
+       ON CONFLICT(strategy, symbol) DO UPDATE SET qty=EXCLUDED.qty, avg_cost=EXCLUDED.avg_cost, updated_at=NOW();`,
+      [strategy, symbol, newQty, avgCost]
+    );
+    return;
+  }
+
+  const { qty, avg_cost } = existing.rows[0];
+  const curQty = Number(qty);
+  const curAvg = Number(avg_cost);
+
+  const newQty = curQty + qtyDelta;
+
+  // If buying more, adjust avg cost; if selling, keep avg cost unless fully closed.
+  let newAvg = curAvg;
+  if (qtyDelta > 0) {
+    const totalCost = curQty * curAvg + qtyDelta * price;
+    newAvg = totalCost / Math.max(newQty, 1e-9);
+  }
+  if (newQty <= 1e-9) {
+    newAvg = 0;
+  }
+
+  await p.query(
+    `UPDATE bot_positions SET qty=$3, avg_cost=$4, updated_at=NOW()
+     WHERE strategy=$1 AND symbol=$2;`,
+    [strategy, symbol, newQty, newAvg]
+  );
+}
+
+export async function recordTrade({ strategy, symbol, side, qty, price, note }) {
+  const p = getPool();
+  if (!p) return null;
+
+  const s = String(side).toUpperCase();
+  if (s !== "BUY" && s !== "SELL") throw new Error("Invalid trade side");
+
+  // BUY reduces cash; SELL increases cash
+  const cashDelta = s === "BUY" ? -(qty * price) : +(qty * price);
+  const qtyDelta = s === "BUY" ? +qty : -qty;
+
+  await p.query("BEGIN");
+  try {
+    await p.query(
+      `INSERT INTO trades(strategy, symbol, side, qty, price, note)
+       VALUES ($1,$2,$3,$4,$5,$6);`,
+      [strategy, symbol, s, qty, price, note || ""]
+    );
+
+    await updateCash(p, strategy, cashDelta);
+    await upsertPosition(p, strategy, symbol, qtyDelta, price);
+
+    await p.query("COMMIT");
+  } catch (e) {
+    await p.query("ROLLBACK");
+    throw e;
+  }
+
+  return true;
+}
+
+export async function getRecentTrades({ limit = 50 } = {}) {
+  const p = getPool();
+  if (!p) return [];
+  const lim = Math.max(1, Math.min(500, Number(limit) || 50));
+  const r = await p.query(
+    `SELECT created_at, strategy, symbol, side, qty, price, note
+     FROM trades
+     ORDER BY created_at DESC
+     LIMIT ${lim};`
+  );
+
+  return r.rows.map(x => ({
+    time: x.created_at,
+    strategy: x.strategy,
+    symbol: x.symbol,
+    side: x.side,
+    qty: Number(x.qty),
+    price: Number(x.price),
+    note: x.note || ""
+  }));
+}
+
+// ---- Learning (impact over time) ----
 
 export async function insertLearningEvent({
   symbol,
@@ -85,6 +263,7 @@ export async function insertLearningEvent({
 export async function getHistoricalPatterns(symbol, limit = 50) {
   const p = getPool();
   if (!p) return [];
+  const lim = Math.max(1, Math.min(500, Number(limit) || 50));
 
   const result = await p.query(
     `
@@ -94,46 +273,33 @@ export async function getHistoricalPatterns(symbol, limit = 50) {
     ORDER BY created_at DESC
     LIMIT $2;
     `,
-    [symbol, limit]
+    [symbol, lim]
   );
 
   return result.rows.map((r) => ({
     signal: r.signal,
-    outcome: r.outcome_pct,
+    outcome: Number(r.outcome_pct),
     timestamp: new Date(r.created_at).getTime(),
   }));
 }
 
 export function calculateAccuracyFromPatterns(arr) {
   if (!arr || arr.length === 0) return "0.0";
-
   const correct = arr.filter((p) => {
     if (p.signal === "BUY") return p.outcome > 0;
     if (p.signal === "SELL") return p.outcome < 0;
-    // HOLD: consider "correct" if it didn't move much
     return Math.abs(p.outcome) < 2;
   }).length;
-
   return ((correct / arr.length) * 100).toFixed(1);
 }
 
-/**
- * Learning impact buckets over time:
- * - bucket: 'hour' or 'day'
- * - limit: number of buckets (e.g. 72 hours)
- * - strategy: optional filter
- */
 export async function getLearningImpact({ symbol, strategy = null, bucket = "hour", limit = 72 }) {
   const p = getPool();
   if (!p) return { buckets: [], cumulative: [] };
 
   const safeBucket = bucket === "day" ? "day" : "hour";
-  const safeLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(500, Number(limit))) : 72;
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 72));
 
-  // Compute correctness in SQL to keep it fast.
-  // BUY correct if outcome_pct > 0
-  // SELL correct if outcome_pct < 0
-  // HOLD correct if abs(outcome_pct) < 2
   const params = [symbol];
   let where = `WHERE symbol = $1`;
 
@@ -142,8 +308,6 @@ export async function getLearningImpact({ symbol, strategy = null, bucket = "hou
     where += ` AND strategy = $${params.length}`;
   }
 
-  // We pick recent buckets by time window using LIMIT after grouping.
-  // This yields sparse buckets only where events exist (which is what we want for MVP).
   const q = `
     SELECT
       date_trunc('${safeBucket}', created_at) AS bucket_ts,
@@ -165,15 +329,12 @@ export async function getLearningImpact({ symbol, strategy = null, bucket = "hou
   `;
 
   const result = await p.query(q, params);
-
-  // Reverse to chronological
   const rows = result.rows.reverse();
 
   const buckets = rows.map((r) => {
     const total = r.total || 0;
     const correct = r.correct || 0;
     const accuracy = total > 0 ? (correct / total) * 100 : 0;
-
     return {
       t: new Date(r.bucket_ts).getTime(),
       total,
@@ -183,7 +344,6 @@ export async function getLearningImpact({ symbol, strategy = null, bucket = "hou
     };
   });
 
-  // Cumulative rolling accuracy
   let cumTotal = 0;
   let cumCorrect = 0;
   const cumulative = buckets.map((b) => {
