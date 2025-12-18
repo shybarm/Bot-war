@@ -1,218 +1,177 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AI Trading Arena</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
   <style>
-    :root{
-      --bg:#0b1020;
-      --card:#0f1733;
-      --text:#eaf0ff;
-      --muted:#a9b7e6;
-      --accent:#7c5cff;
-      --good:#2dd4bf;
-      --bad:#fb7185;
-      --line:rgba(255,255,255,0.08);
-      --shadow: 0 18px 60px rgba(0,0,0,.35);
-      --radius: 18px;
-    }
-    *{box-sizing:border-box}
     body{
-      margin:0;
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-      background: radial-gradient(1200px 900px at 10% 10%, rgba(124,92,255,.25), transparent 55%),
-                  radial-gradient(900px 700px at 90% 20%, rgba(45,212,191,.18), transparent 60%),
-                  radial-gradient(900px 700px at 50% 90%, rgba(251,113,133,.14), transparent 55%),
-                  var(--bg);
-      color:var(--text);
+      background: radial-gradient(1200px 700px at 20% 10%, rgba(99,102,241,.25), transparent 60%),
+                  radial-gradient(900px 600px at 80% 60%, rgba(20,184,166,.20), transparent 55%),
+                  #070b1a;
+      color: #e5e7eb;
     }
-    .wrap{max-width:1280px;margin:0 auto;padding:28px 18px 60px}
-    .top{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
-    .brand h1{margin:0;font-size:28px;letter-spacing:.3px}
-    .brand p{margin:8px 0 0;color:var(--muted);max-width:760px;line-height:1.35}
-    .panel{
-      display:flex;gap:10px;flex-wrap:wrap;align-items:center;
-      background:rgba(255,255,255,.04);
-      border:1px solid var(--line);
-      box-shadow:var(--shadow);
-      padding:12px;border-radius:var(--radius);
+    .glass{
+      background: rgba(17,24,39,.55);
+      border: 1px solid rgba(255,255,255,.08);
+      box-shadow: 0 18px 70px rgba(0,0,0,.45);
+      backdrop-filter: blur(14px);
     }
-    .panel label{font-size:12px;color:var(--muted);display:block;margin-bottom:6px}
-    .field{display:flex;flex-direction:column}
-    input, select, button{
-      height:42px;border-radius:12px;border:1px solid var(--line);
-      background:rgba(255,255,255,.04); color:var(--text);
-      padding:0 12px; outline:none;
+    .muted{ color: rgba(229,231,235,.72); }
+    .chip{
+      border:1px solid rgba(255,255,255,.10);
+      background: rgba(255,255,255,.06);
     }
-    input::placeholder{color:rgba(234,240,255,.45)}
-    button{
-      background:linear-gradient(135deg, rgba(124,92,255,.95), rgba(124,92,255,.55));
-      border:1px solid rgba(124,92,255,.35);
-      cursor:pointer;
-      font-weight:700;
-      letter-spacing:.2px;
-    }
-    button.secondary{
-      background:rgba(255,255,255,.05);
-      border:1px solid var(--line);
-      font-weight:600;
-      color:var(--text);
-    }
-    .grid{display:grid;grid-template-columns:1.25fr .75fr;gap:16px;margin-top:16px}
-    @media (max-width: 980px){ .grid{grid-template-columns:1fr} }
-
-    .card{
-      background:linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
-      border:1px solid var(--line);
-      border-radius:var(--radius);
-      padding:16px;
-      box-shadow:var(--shadow);
-    }
-    .card h2{margin:0 0 8px;font-size:16px;color:var(--text)}
-    .sub{color:var(--muted);font-size:12px;margin:0 0 12px}
-    .row{display:flex;gap:12px;flex-wrap:wrap}
-    .kpi{display:flex;flex-direction:column;gap:6px;padding:12px;border-radius:14px;border:1px solid var(--line);background:rgba(255,255,255,.03);min-width:180px}
-    .kpi .v{font-size:18px;font-weight:800}
-    .kpi .l{font-size:12px;color:var(--muted)}
-    .pill{
-      display:inline-flex;align-items:center;gap:8px;
-      padding:7px 10px;border-radius:999px;
-      border:1px solid var(--line);
-      background:rgba(255,255,255,.04);
-      color:var(--muted);
-      font-size:12px;
-    }
-    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
-    .hr{height:1px;background:var(--line);margin:14px 0}
-
-    .bots{display:grid;grid-template-columns:repeat(3, 1fr);gap:12px}
-    @media (max-width: 980px){ .bots{grid-template-columns:1fr} }
-
-    .bot{padding:14px;border-radius:16px;border:1px solid var(--line);background:linear-gradient(180deg, rgba(16,27,61,.75), rgba(15,23,51,.65))}
-    .bot .t{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-    .name{font-weight:900}
-    .sig{font-weight:900;letter-spacing:.4px}
-    .sig.buy{color:var(--good)}
-    .sig.sell{color:var(--bad)}
-    .sig.hold{color:var(--muted)}
-    .meta{color:var(--muted);font-size:12px;line-height:1.35}
-    .bar{height:10px;border-radius:999px;background:rgba(255,255,255,.07);overflow:hidden;margin-top:10px}
-    .bar > div{height:100%;background:linear-gradient(90deg, rgba(45,212,191,.9), rgba(124,92,255,.85));width:0%}
-
-    .news a{color:var(--text);text-decoration:none}
-    .news a:hover{text-decoration:underline}
-    .news-item{padding:10px 0;border-bottom:1px solid var(--line)}
-    .news-item:last-child{border-bottom:none}
-
-    table{width:100%;border-collapse:collapse}
-    th, td{padding:10px 8px;border-bottom:1px solid var(--line);text-align:left;font-size:12px;color:var(--muted);vertical-align:top}
-    th{color:var(--text);font-size:12px}
-    .err{
-      margin-top:10px;
-      padding:10px 12px;
-      border:1px solid rgba(251,113,133,.35);
-      background:rgba(251,113,133,.08);
-      border-radius:12px;
-      color:#ffd3da;
-      font-size:12px;
+    .btn{
+      background: linear-gradient(135deg, rgba(99,102,241,.95), rgba(168,85,247,.90));
     }
   </style>
 </head>
 
-<body>
-  <div class="wrap">
-    <div class="top">
-      <div class="brand">
-        <h1>AI Trading Arena</h1>
-        <p>
-          Three bots compete with real market data. Each bot starts with <b>$100,000</b> and aims for <b>$150,000</b>.
+<body class="min-h-screen">
+  <div class="max-w-6xl mx-auto px-6 py-10">
+    <div class="flex items-start justify-between gap-6">
+      <div>
+        <h1 class="text-4xl font-bold tracking-tight">AI Trading Arena</h1>
+        <p class="mt-2 muted max-w-2xl">
+          Four bots compete with real market data. Each starts with <b>$100,000</b> and aims for <b>$150,000</b>.
           You can type <b>any ticker</b> (all stocks are open).
         </p>
       </div>
 
-      <div class="panel">
-        <div class="field">
-          <label>Stock symbol (any ticker)</label>
-          <input id="symbol" placeholder="AAPL, TSLA, NVDA..." value="AAPL" />
+      <div class="flex items-center gap-3">
+        <a href="/war-room.html" class="chip px-4 py-2 rounded-xl hover:opacity-90">
+          ⚔️ War Room
+        </a>
+        <a href="/api/health" target="_blank" class="chip px-4 py-2 rounded-xl hover:opacity-90">
+          API Health
+        </a>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="glass mt-8 rounded-2xl p-5">
+      <div class="grid md:grid-cols-12 gap-4 items-end">
+        <div class="md:col-span-4">
+          <label class="text-sm muted">Stock symbol (any ticker)</label>
+          <input id="symbolInput" class="mt-2 w-full rounded-xl px-4 py-3 bg-slate-900/60 border border-white/10 outline-none"
+                 value="AAPL" />
         </div>
 
-        <div class="field">
-          <label>Learning speed</label>
-          <select id="learningSpeed">
+        <div class="md:col-span-4">
+          <label class="text-sm muted">Learning speed</label>
+          <select id="speedSelect" class="mt-2 w-full rounded-xl px-4 py-3 bg-slate-900/60 border border-white/10 outline-none">
             <option value="realtime">Real-time (production)</option>
             <option value="accelerated">Accelerated (fast feedback)</option>
           </select>
+          <p class="text-xs muted mt-2">Controls how quickly predictions get evaluated as correct/incorrect.</p>
         </div>
 
-        <div class="field">
-          <label>&nbsp;</label>
-          <button id="runFight">Run “Bots Fight”</button>
+        <div class="md:col-span-4 flex gap-3">
+          <button id="runBtn" class="btn w-full rounded-xl px-5 py-3 font-semibold hover:opacity-95">
+            Run “Bots Fight”
+          </button>
+          <button id="refreshBtn" class="chip w-full rounded-xl px-5 py-3 font-semibold hover:opacity-95">
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <div id="topError" class="hidden mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm"></div>
+    </div>
+
+    <!-- Main grid -->
+    <div class="grid lg:grid-cols-12 gap-6 mt-8">
+      <div class="lg:col-span-7 glass rounded-2xl p-6">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xl font-semibold">Fight Results</h2>
+          <span class="chip px-3 py-1 rounded-lg text-xs muted">4 bots • real-time ledger</span>
+        </div>
+        <p class="text-sm muted mt-1">Signals + bankroll progress toward $150k</p>
+
+        <div class="grid sm:grid-cols-3 gap-4 mt-5">
+          <div class="chip rounded-2xl p-4">
+            <div class="text-xs muted">Price</div>
+            <div id="priceBox" class="text-2xl font-bold mt-1">—</div>
+          </div>
+          <div class="chip rounded-2xl p-4">
+            <div class="text-xs muted">Change %</div>
+            <div id="chgBox" class="text-2xl font-bold mt-1">—</div>
+          </div>
+          <div class="chip rounded-2xl p-4">
+            <div class="text-xs muted">Avg news sentiment</div>
+            <div id="sentBox" class="text-2xl font-bold mt-1">—</div>
+          </div>
         </div>
 
-        <div class="field">
-          <label>&nbsp;</label>
-          <button class="secondary" id="refresh">Refresh</button>
+        <div class="mt-4 chip rounded-2xl p-4">
+          <div class="text-xs muted">Winner (highest confidence)</div>
+          <div id="winnerBox" class="text-lg font-semibold mt-1">—</div>
+        </div>
+
+        <div class="mt-6">
+          <h3 class="font-semibold">Bots (4)</h3>
+          <div id="botsList" class="mt-3 grid sm:grid-cols-2 gap-3"></div>
+        </div>
+
+        <div class="mt-6">
+          <div class="flex items-center justify-between">
+            <h3 class="font-semibold">Trade Ledger (Most Recent)</h3>
+            <span class="text-xs muted">Shows BUY/SELL + bot rationale</span>
+          </div>
+          <div class="mt-3 overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="muted">
+                <tr class="text-left">
+                  <th class="py-2 pr-3">Time</th>
+                  <th class="py-2 pr-3">Bot</th>
+                  <th class="py-2 pr-3">Side</th>
+                  <th class="py-2 pr-3">Symbol</th>
+                  <th class="py-2 pr-3">Qty</th>
+                  <th class="py-2 pr-3">Price</th>
+                  <th class="py-2">Why</th>
+                </tr>
+              </thead>
+              <tbody id="tradesTbody">
+                <tr class="muted"><td class="py-3" colspan="7">—</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="lg:col-span-5 glass rounded-2xl p-6">
+        <h2 class="text-xl font-semibold">Latest News (Top 8)</h2>
+        <p class="text-sm muted mt-1">Used for sentiment features + learning evaluation context</p>
+        <div id="newsBox" class="mt-4 space-y-3">
+          <div class="muted">—</div>
         </div>
       </div>
     </div>
 
-    <div class="grid">
-      <div class="card">
-        <h2>Fight Results</h2>
-        <p class="sub">Signals + bankroll progress toward $150k</p>
-
-        <div class="row">
-          <div class="kpi"><div class="l">Price</div><div class="v" id="price">—</div></div>
-          <div class="kpi"><div class="l">Change %</div><div class="v" id="chg">—</div></div>
-          <div class="kpi"><div class="l">Avg news sentiment</div><div class="v" id="sent">—</div></div>
-          <div class="kpi"><div class="l">Winner (highest confidence)</div><div class="v" id="winner">—</div></div>
-        </div>
-
-        <div class="hr"></div>
-
-        <div class="bots" id="bots"></div>
-
-        <div id="errorBox" class="err" style="display:none"></div>
-
-        <div class="hr"></div>
-
-        <h2 style="margin-top:0">Trade Ledger (Most Recent)</h2>
-        <p class="sub">Shows BUY/SELL + the bot’s rationale</p>
-        <div class="mono" id="tradesMeta" style="margin-bottom:8px;color:var(--muted);font-size:12px">—</div>
-        <div style="overflow:auto">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Bot</th>
-                <th>Side</th>
-                <th>Symbol</th>
-                <th>Qty</th>
-                <th>Price</th>
-                <th>Why</th>
-              </tr>
-            </thead>
-            <tbody id="tradesTable">
-              <tr><td colspan="7">—</td></tr>
-            </tbody>
-          </table>
-        </div>
+    <!-- Learning impact -->
+    <div class="glass rounded-2xl p-6 mt-8">
+      <div class="flex items-center justify-between">
+        <h2 class="text-xl font-semibold">Learning impact over time</h2>
+        <span class="chip px-3 py-1 rounded-lg text-xs muted">Accuracy % by bot strategy</span>
       </div>
-
-      <div class="card">
-        <h2>Latest News (Top 8)</h2>
-        <p class="sub">Used for sentiment features + learning evaluation context</p>
-        <div class="news" id="news">—</div>
+      <div class="mt-4">
+        <canvas id="impactChart" height="120"></canvas>
       </div>
     </div>
 
-    <div class="card" style="margin-top:16px">
-      <h2>Diagnostics</h2>
-      <p class="sub">Useful to confirm services and settings</p>
-      <div class="row">
-        <span class="pill">API: <span class="mono" id="health">—</span></span>
-        <span class="pill">Version: <span class="mono" id="version">—</span></span>
+    <!-- Diagnostics -->
+    <div class="glass rounded-2xl p-6 mt-8">
+      <h2 class="text-xl font-semibold">Diagnostics</h2>
+      <p class="text-sm muted mt-1">Useful to confirm services and settings</p>
+      <div class="mt-4 flex flex-wrap gap-3">
+        <span id="apiChip" class="chip px-3 py-2 rounded-xl text-xs muted">API: —</span>
+        <span id="verChip" class="chip px-3 py-2 rounded-xl text-xs muted">Version: —</span>
+        <span id="speedChip" class="chip px-3 py-2 rounded-xl text-xs muted">Learning speed: —</span>
       </div>
     </div>
   </div>
@@ -220,196 +179,213 @@
 <script>
   const $ = (id) => document.getElementById(id);
 
-  function money(x){
-    if (typeof x !== 'number') return '—';
-    return '$' + x.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  }
-  function pct(x){
-    if (typeof x !== 'number') return '—';
-    return x.toFixed(2) + '%';
-  }
-  function sigClass(s){
-    const x = String(s||'').toUpperCase();
-    if (x === 'BUY') return 'buy';
-    if (x === 'SELL') return 'sell';
-    return 'hold';
-  }
+  let chart = null;
+
   function showError(msg){
-    const box = $('errorBox');
-    if (!msg){
-      box.style.display = 'none';
-      box.textContent = '';
-      return;
-    }
-    box.style.display = 'block';
-    box.textContent = msg;
+    const el = $("topError");
+    el.textContent = msg;
+    el.classList.remove("hidden");
+  }
+  function clearError(){
+    $("topError").classList.add("hidden");
+    $("topError").textContent = "";
   }
 
-  async function apiGet(url){
-    const r = await fetch(url);
-    const text = await r.text();
-    // If server returns HTML, this avoids the cryptic "<" JSON error:
-    try{
-      const j = JSON.parse(text);
-      if (!r.ok) throw new Error(j.error || 'Request failed');
-      return j;
-    }catch{
-      throw new Error(`API returned non-JSON. Check server route: ${url}`);
-    }
+  async function getJSON(url, opts){
+    const r = await fetch(url, opts);
+    const txt = await r.text();
+    try { return JSON.parse(txt); }
+    catch(e){ throw new Error(`API returned non-JSON. Check server route: ${url}`); }
   }
 
-  async function apiPost(url, body){
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const text = await r.text();
-    try{
-      const j = JSON.parse(text);
-      if (!r.ok) throw new Error(j.error || 'Request failed');
-      return j;
-    }catch{
-      throw new Error(`API returned non-JSON. Check server route: ${url}`);
-    }
-  }
-
-  async function loadMeta(){
-    try{
-      const v = await apiGet('/api/version');
-      $('version').textContent = v.version;
-
-      const h = await apiGet('/api/health');
-      $('health').textContent = JSON.stringify(h.apis);
-
-      const s = await apiGet('/api/settings');
-      $('learningSpeed').value = s.learningSpeed;
-    }catch(e){
-      $('health').textContent = e.message;
-    }
-  }
-
-  async function saveLearningSpeed(){
-    const learningSpeed = $('learningSpeed').value;
-    await apiPost('/api/settings/learning-speed', { learningSpeed });
-  }
-
-  function renderNews(news){
-    if (!news || !news.length){
-      $('news').innerHTML = '<div style="color:var(--muted);font-size:12px">No news found.</div>';
-      return;
-    }
-    $('news').innerHTML = news.slice(0,8).map(n => `
-      <div class="news-item">
-        <div style="font-weight:800;margin-bottom:4px">
-          <a href="${n.url}" target="_blank" rel="noreferrer">${n.title || 'Untitled'}</a>
+  function renderBots(bots){
+    const box = $("botsList");
+    box.innerHTML = "";
+    for(const b of bots){
+      const div = document.createElement("div");
+      div.className = "chip rounded-2xl p-4";
+      div.innerHTML = `
+        <div class="flex items-center justify-between">
+          <div class="font-semibold">${b.label || b.strategy}</div>
+          <div class="text-xs muted">${b.horizon}</div>
         </div>
-        <div style="color:var(--muted);font-size:12px;line-height:1.3">
-          ${n.source || ''} • ${new Date(n.publishedAt).toLocaleString()} • sentiment: ${Number(n.sentiment || 0).toFixed(2)}
+        <div class="mt-2 text-sm">
+          <span class="font-semibold">${b.signal}</span>
+          <span class="muted">• conf ${b.confidence ?? b.baseConfidence}</span>
         </div>
-      </div>
-    `).join('');
+        <div class="mt-2 text-xs muted">${b.rationale || ""}</div>
+      `;
+      box.appendChild(div);
+    }
   }
 
-  function renderTrades(rows){
-    const body = $('tradesTable');
-    if (!rows || !rows.length){
-      body.innerHTML = `<tr><td colspan="7">No trades yet. Run the fight a few times.</td></tr>`;
+  function renderTrades(items){
+    const tb = $("tradesTbody");
+    if(!items || !items.length){
+      tb.innerHTML = `<tr class="muted"><td class="py-3" colspan="7">—</td></tr>`;
       return;
     }
-    body.innerHTML = rows.map(r => `
-      <tr>
-        <td class="mono">${new Date(r.created_at).toLocaleString()}</td>
-        <td class="mono">${r.strategy}</td>
-        <td class="mono">${r.side}</td>
-        <td class="mono">${r.symbol}</td>
-        <td class="mono">${Number(r.qty).toFixed(4)}</td>
-        <td class="mono">${Number(r.price).toFixed(2)}</td>
-        <td>${(r.note || '').replaceAll('rationale=','')}</td>
+    tb.innerHTML = items.map(t => `
+      <tr class="border-t border-white/5">
+        <td class="py-2 pr-3 muted">${new Date(t.ts).toLocaleString()}</td>
+        <td class="py-2 pr-3">${t.bot}</td>
+        <td class="py-2 pr-3">${t.side}</td>
+        <td class="py-2 pr-3">${t.symbol}</td>
+        <td class="py-2 pr-3">${Number(t.qty || 0).toFixed(3)}</td>
+        <td class="py-2 pr-3">$${Number(t.price || 0).toFixed(2)}</td>
+        <td class="py-2 muted">${t.rationale || ""}</td>
       </tr>
-    `).join('');
+    `).join("");
   }
 
-  async function refreshLedger(){
-    const r = await apiGet('/api/trades/recent?limit=25');
-    $('tradesMeta').textContent = `Showing latest ${r.rows.length} trades`;
-    renderTrades(r.rows);
+  function renderNews(pack){
+    const box = $("newsBox");
+    const items = pack?.items || [];
+    if(!items.length){
+      box.innerHTML = `<div class="muted">—</div>`;
+      return;
+    }
+    box.innerHTML = items.map(n => `
+      <a class="block chip rounded-2xl p-4 hover:opacity-95" href="${n.url || "#"}" target="_blank">
+        <div class="text-sm font-semibold">${(n.title || "").slice(0, 140)}</div>
+        <div class="text-xs muted mt-1">${n.source || ""} • ${n.publishedAt ? new Date(n.publishedAt).toLocaleString() : ""}</div>
+        <div class="text-xs muted mt-2">${(n.summary || "").slice(0, 160)}</div>
+      </a>
+    `).join("");
   }
 
-  async function runFight(){
-    showError(null);
+  function renderImpactChart(byStrategy){
+    const strategies = Object.keys(byStrategy || {});
+    if(!strategies.length) return;
 
-    const symbol = $('symbol').value.trim().toUpperCase();
-    if (!symbol) return;
+    // Build unified x-axis (days)
+    const daySet = new Set();
+    strategies.forEach(s => (byStrategy[s] || []).forEach(p => daySet.add(p.day)));
+    const days = Array.from(daySet).sort();
 
-    $('price').textContent = '—';
-    $('chg').textContent = '—';
-    $('sent').textContent = '—';
-    $('winner').textContent = '—';
-    $('bots').innerHTML = '<div style="color:var(--muted);font-size:12px">Running bots fight...</div>';
+    const datasets = strategies.map(s => {
+      const map = new Map((byStrategy[s] || []).map(p => [p.day, p.accuracy]));
+      return {
+        label: s,
+        data: days.map(d => map.has(d) ? map.get(d) : null),
+        spanGaps: true,
+        tension: 0.25
+      };
+    });
 
+    const ctx = $("impactChart").getContext("2d");
+    if(chart) chart.destroy();
+    chart = new Chart(ctx, {
+      type: "line",
+      data: { labels: days, datasets },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { labels: { color: "rgba(229,231,235,.8)" } }
+        },
+        scales: {
+          x: { ticks: { color: "rgba(229,231,235,.6)" }, grid: { color: "rgba(255,255,255,.06)" } },
+          y: { ticks: { color: "rgba(229,231,235,.6)" }, grid: { color: "rgba(255,255,255,.06)" }, suggestedMin: 0, suggestedMax: 100 }
+        }
+      }
+    });
+  }
+
+  async function loadDiagnostics(){
+    const health = await getJSON("/api/health");
+    $("apiChip").textContent = `API: ${JSON.stringify(health.apis)}`;
+    $("verChip").textContent = `Version: ${health.version}`;
+
+    const speed = await getJSON("/api/settings/learning-speed");
+    $("speedChip").textContent = `Learning speed: ${speed.mode} (${speed.evalAfterSec}s)`;
+
+    // Sync dropdown to server state
+    $("speedSelect").value = speed.mode === "accelerated" ? "accelerated" : "realtime";
+  }
+
+  async function loadImpact(){
+    const impact = await getJSON("/api/learning/impact?days=14");
+    renderImpactChart(impact.byStrategy);
+  }
+
+  async function loadTrades(){
+    const t = await getJSON("/api/trades/recent?limit=25");
+    renderTrades(t.items || []);
+  }
+
+  async function runBots(){
+    clearError();
+    const symbol = $("symbolInput").value.trim().toUpperCase() || "AAPL";
+
+    $("winnerBox").textContent = "Running…";
+    $("priceBox").textContent = "—";
+    $("chgBox").textContent = "—";
+    $("sentBox").textContent = "—";
+
+    const result = await getJSON(`/api/bots/${encodeURIComponent(symbol)}`);
+    $("winnerBox").textContent = result.winner || "—";
+
+    const f = result.features || {};
+    $("priceBox").textContent = f.price ? `$${Number(f.price).toFixed(2)}` : "—";
+    $("chgBox").textContent = (f.changePercent !== undefined) ? `${Number(f.changePercent).toFixed(2)}%` : "—";
+    $("sentBox").textContent = (f.avgSent !== undefined) ? `${Number(f.avgSent).toFixed(2)}` : "—";
+
+    // enrich 4 bots with labels if not present
+    const labelMap = {
+      sp500_long: "S&P500 Long",
+      market_swing: "Market Swing",
+      day_trade: "Day Trade",
+      news_only: "News-Only"
+    };
+    const bots = (result.bots || []).map(b => ({ ...b, label: labelMap[b.strategy] || b.strategy }));
+    renderBots(bots);
+
+    const news = await getJSON(`/api/news/${encodeURIComponent(symbol)}`);
+    renderNews(news);
+
+    await loadTrades();
+    await loadImpact();
+  }
+
+  async function setSpeed(){
+    clearError();
+    const mode = $("speedSelect").value === "accelerated" ? "accelerated" : "realtime";
+    const payload = mode === "accelerated"
+      ? { mode: "accelerated", evalAfterSec: 30 }
+      : { mode: "realtime", evalAfterSec: 3600 };
+
+    await getJSON("/api/settings/learning-speed", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify(payload)
+    });
+    await loadDiagnostics();
+    await loadImpact();
+  }
+
+  $("runBtn").addEventListener("click", () => runBots().catch(e => showError(e.message)));
+  $("refreshBtn").addEventListener("click", async () => {
+    try {
+      clearError();
+      await loadDiagnostics();
+      await loadTrades();
+      await loadImpact();
+    } catch(e){
+      showError(e.message);
+    }
+  });
+  $("speedSelect").addEventListener("change", () => setSpeed().catch(e => showError(e.message)));
+
+  (async function init(){
     try{
-      await saveLearningSpeed();
-
-      const r = await apiGet(`/api/fight/${encodeURIComponent(symbol)}`);
-
-      $('price').textContent = money(r.quote?.price);
-      $('chg').textContent = pct(r.quote?.changePercent);
-      $('sent').textContent = (r.features?.avgSent ?? 0).toFixed(2);
-      $('winner').textContent = r.winner || '—';
-
-      const status = r.status || [];
-      const botBy = Object.fromEntries((r.bots || []).map(b => [b.strategy, b]));
-
-      $('bots').innerHTML = status.map(s => {
-        const progress = s.progressPct ?? 0;
-        const bot = botBy[s.strategy] || {};
-        const signal = String(bot.signal || 'HOLD').toUpperCase();
-
-        return `
-          <div class="bot">
-            <div class="t">
-              <div class="name">${s.strategy}</div>
-              <div class="sig ${sigClass(signal)}">${signal}</div>
-            </div>
-            <div class="meta">
-              <b>${bot.rationale || ''}</b><br/>
-              Horizon: ${bot.horizon || '—'} • Confidence: ${bot.confidence ?? '—'}% • Samples: ${bot.samples ?? 0}<br/>
-              Equity: <b>${money(s.equity)}</b> • Cash: ${money(s.cash)} • Positions: ${(s.positions||[]).length}
-            </div>
-
-            <div class="bar"><div style="width:${progress.toFixed(2)}%"></div></div>
-            <div class="meta" style="margin-top:8px">
-              Progress: <b>${progress.toFixed(2)}%</b> (from ${money(s.startingCash)} → ${money(s.targetCash)})
-            </div>
-
-            ${(s.positions||[]).length ? `
-              <div class="hr"></div>
-              <div class="meta"><b>Positions</b></div>
-              <div class="meta mono">
-                ${(s.positions||[]).slice(0,6).map(p => `${p.symbol}: ${Number(p.qty).toFixed(4)} @ ${Number(p.avg_price).toFixed(2)}`).join('<br/>')}
-              </div>
-            ` : ''}
-          </div>
-        `;
-      }).join('');
-
-      renderNews(r.news || []);
-      await refreshLedger();
+      await loadDiagnostics();
+      await loadTrades();
+      await loadImpact();
     }catch(e){
       showError(e.message);
-      $('bots').innerHTML = `<div style="color:var(--muted);font-size:12px">—</div>`;
     }
-  }
-
-  $('learningSpeed').addEventListener('change', async () => {
-    try{ await saveLearningSpeed(); }catch{}
-  });
-
-  $('runFight').addEventListener('click', runFight);
-  $('refresh').addEventListener('click', async () => { await loadMeta(); await runFight(); });
-
-  loadMeta().then(() => runFight());
+  })();
 </script>
+
 </body>
 </html>
