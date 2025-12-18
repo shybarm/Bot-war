@@ -10,562 +10,232 @@
 
   <style>
     body{
-      background: radial-gradient(1200px 700px at 20% 10%, rgba(99,102,241,.25), transparent 60%),
-                  radial-gradient(900px 600px at 80% 60%, rgba(20,184,166,.20), transparent 55%),
-                  #070b1a;
-      color: #e5e7eb;
+      background:
+        radial-gradient(1200px 700px at 20% 10%, rgba(99,102,241,.28), transparent 60%),
+        radial-gradient(900px 600px at 80% 60%, rgba(20,184,166,.22), transparent 55%),
+        #070b1a;
+      color:#e5e7eb;
     }
     .glass{
-      background: rgba(17,24,39,.55);
-      border: 1px solid rgba(255,255,255,.08);
-      box-shadow: 0 18px 70px rgba(0,0,0,.45);
-      backdrop-filter: blur(14px);
+      background: rgba(17,24,39,.58);
+      border:1px solid rgba(255,255,255,.08);
+      box-shadow:0 20px 80px rgba(0,0,0,.45);
+      backdrop-filter: blur(16px);
     }
-    .muted{ color: rgba(229,231,235,.72); }
     .chip{
       border:1px solid rgba(255,255,255,.10);
       background: rgba(255,255,255,.06);
     }
-    .btn{
-      background: linear-gradient(135deg, rgba(99,102,241,.95), rgba(168,85,247,.90));
+    .muted{ color: rgba(229,231,235,.7); }
+    .badge-real{
+      background: linear-gradient(135deg,#22c55e,#16a34a);
+      color:#021b0d;
     }
-    .modal-bg{
-      background: rgba(0,0,0,.55);
-      backdrop-filter: blur(6px);
+    .badge-mock{
+      background: linear-gradient(135deg,#f97316,#ef4444);
+      color:#220900;
     }
   </style>
 </head>
 
 <body class="min-h-screen">
-  <div class="max-w-6xl mx-auto px-6 py-10">
-    <div class="flex items-start justify-between gap-6">
-      <div>
-        <h1 class="text-4xl font-bold tracking-tight">AI Trading Arena</h1>
-        <p class="mt-2 muted max-w-2xl">
-          Four bots compete with real market data. Each starts with <b>$100,000</b> and aims for <b>$150,000</b>.
-          You can type <b>any ticker</b>.
-        </p>
-      </div>
+<div class="max-w-6xl mx-auto px-6 py-10">
 
-      <div class="flex items-center gap-3">
-        <a href="/war-room.html" class="chip px-4 py-2 rounded-xl hover:opacity-90">⚔️ War Room</a>
-        <a href="/api/health" target="_blank" class="chip px-4 py-2 rounded-xl hover:opacity-90">API Health</a>
-      </div>
+  <!-- Header -->
+  <div class="flex items-start justify-between gap-6">
+    <div>
+      <h1 class="text-4xl font-bold tracking-tight">
+        AI Trading Arena
+      </h1>
+      <p class="mt-2 muted max-w-2xl">
+        Autonomous trading intelligence. Four AI bots compete continuously using live markets, news, and persistent learning.
+      </p>
     </div>
 
-    <!-- Controls -->
-    <div class="glass mt-8 rounded-2xl p-5">
-      <div class="grid md:grid-cols-12 gap-4 items-end">
-        <div class="md:col-span-3">
-          <label class="text-sm muted">Stock symbol (any ticker)</label>
-          <input id="symbolInput" class="mt-2 w-full rounded-xl px-4 py-3 bg-slate-900/60 border border-white/10 outline-none"
-                 value="AAPL" />
-        </div>
-
-        <div class="md:col-span-3">
-          <label class="text-sm muted">Learning speed</label>
-          <select id="speedSelect" class="mt-2 w-full rounded-xl px-4 py-3 bg-slate-900/60 border border-white/10 outline-none">
-            <option value="realtime">Real-time (production)</option>
-            <option value="accelerated">Accelerated (fast feedback)</option>
-          </select>
-        </div>
-
-        <div class="md:col-span-3">
-          <label class="text-sm muted">Universe mode (carousel)</label>
-          <select id="universeSelect" class="mt-2 w-full rounded-xl px-4 py-3 bg-slate-900/60 border border-white/10 outline-none">
-            <option value="any">Any ticker</option>
-            <option value="sp500">S&P500 list</option>
-            <option value="custom">Custom list</option>
-          </select>
-        </div>
-
-        <div class="md:col-span-3 flex gap-3">
-          <button id="runBtn" class="btn w-full rounded-xl px-5 py-3 font-semibold hover:opacity-95">
-            Run “Bots Fight”
-          </button>
-          <button id="refreshBtn" class="chip w-full rounded-xl px-5 py-3 font-semibold hover:opacity-95">
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      <div id="customUniverseWrap" class="hidden mt-4">
-        <label class="text-sm muted">Custom tickers (comma or newline separated)</label>
-        <textarea id="customUniverse" rows="2"
-          class="mt-2 w-full rounded-xl px-4 py-3 bg-slate-900/60 border border-white/10 outline-none"
-          placeholder="AAPL, MSFT, NVDA"></textarea>
-        <div class="mt-3 flex justify-end">
-          <button id="saveUniverseBtn" class="chip px-4 py-2 rounded-xl hover:opacity-90">Save universe</button>
-        </div>
-      </div>
-
-      <div id="runnerBar" class="mt-4 flex flex-wrap gap-3"></div>
-
-      <div id="topError" class="hidden mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm"></div>
+    <div class="flex items-center gap-3">
+      <a href="/war-room.html" class="chip px-4 py-2 rounded-xl hover:opacity-90">
+        ⚔️ War Room
+      </a>
+      <span id="wsStatus" class="chip px-4 py-2 rounded-xl text-xs muted">
+        WS: connecting…
+      </span>
     </div>
+  </div>
 
-    <!-- Main grid -->
-    <div class="grid lg:grid-cols-12 gap-6 mt-8">
-      <div class="lg:col-span-7 glass rounded-2xl p-6">
-        <div class="flex items-center justify-between">
-          <h2 class="text-xl font-semibold">Fight Results</h2>
-          <span class="chip px-3 py-1 rounded-lg text-xs muted">4 bots • learning-enabled</span>
+  <!-- Live Status Bar -->
+  <div class="glass rounded-2xl p-5 mt-8">
+    <div class="flex flex-wrap gap-3 items-center">
+      <span class="chip px-3 py-2 rounded-xl text-xs muted" id="marketChip">Market: —</span>
+      <span class="chip px-3 py-2 rounded-xl text-xs muted" id="runnerChip">Runner: —</span>
+      <span class="chip px-3 py-2 rounded-xl text-xs muted">
+        Symbol: <b id="liveSymbol">—</b>
+      </span>
+      <span class="chip px-3 py-2 rounded-xl text-xs muted">
+        Last event: <span id="lastEvent">—</span>
+      </span>
+    </div>
+  </div>
+
+  <!-- Main Grid -->
+  <div class="grid lg:grid-cols-12 gap-6 mt-8">
+
+    <!-- Left -->
+    <div class="lg:col-span-7 glass rounded-2xl p-6">
+      <h2 class="text-xl font-semibold">Current Intelligence Snapshot</h2>
+
+      <div class="grid sm:grid-cols-3 gap-4 mt-5">
+        <div class="chip rounded-2xl p-4">
+          <div class="text-xs muted">Price</div>
+          <div id="priceBox" class="text-2xl font-bold mt-1">—</div>
         </div>
-
-        <div class="grid sm:grid-cols-3 gap-4 mt-5">
-          <div class="chip rounded-2xl p-4">
-            <div class="text-xs muted">Price</div>
-            <div id="priceBox" class="text-2xl font-bold mt-1">—</div>
-          </div>
-          <div class="chip rounded-2xl p-4">
-            <div class="text-xs muted">Change %</div>
-            <div id="chgBox" class="text-2xl font-bold mt-1">—</div>
-          </div>
-          <div class="chip rounded-2xl p-4">
-            <div class="text-xs muted">Avg news sentiment</div>
-            <div id="sentBox" class="text-2xl font-bold mt-1">—</div>
-          </div>
+        <div class="chip rounded-2xl p-4">
+          <div class="text-xs muted">Change %</div>
+          <div id="chgBox" class="text-2xl font-bold mt-1">—</div>
         </div>
-
-        <div class="mt-4 chip rounded-2xl p-4">
-          <div class="text-xs muted">Winner (highest confidence)</div>
-          <div id="winnerBox" class="text-lg font-semibold mt-1">—</div>
-          <div id="marketBox" class="text-xs muted mt-2">—</div>
-        </div>
-
-        <div class="mt-6">
-          <h3 class="font-semibold">Bots (click to see full history)</h3>
-          <div id="botsList" class="mt-3 grid sm:grid-cols-2 gap-3"></div>
-        </div>
-
-        <div class="mt-6">
-          <div class="flex items-center justify-between">
-            <h3 class="font-semibold">Trade Ledger (Most Recent)</h3>
-            <span class="text-xs muted">BUY/SELL + rationale</span>
-          </div>
-          <div class="mt-3 overflow-x-auto">
-            <table class="min-w-full text-sm">
-              <thead class="muted">
-                <tr class="text-left">
-                  <th class="py-2 pr-3">Time</th>
-                  <th class="py-2 pr-3">Bot</th>
-                  <th class="py-2 pr-3">Side</th>
-                  <th class="py-2 pr-3">Symbol</th>
-                  <th class="py-2 pr-3">Qty</th>
-                  <th class="py-2 pr-3">Price</th>
-                  <th class="py-2">Why</th>
-                </tr>
-              </thead>
-              <tbody id="tradesTbody">
-                <tr class="muted"><td class="py-3" colspan="7">—</td></tr>
-              </tbody>
-            </table>
-          </div>
+        <div class="chip rounded-2xl p-4">
+          <div class="text-xs muted">Avg news sentiment</div>
+          <div id="sentBox" class="text-2xl font-bold mt-1">—</div>
         </div>
       </div>
 
-      <div class="lg:col-span-5 glass rounded-2xl p-6">
-        <h2 class="text-xl font-semibold">Latest News (Top 8)</h2>
-        <p class="text-sm muted mt-1">Click an article for “impact on this stock”</p>
-        <div id="newsBox" class="mt-4 space-y-3">
-          <div class="muted">—</div>
+      <div class="mt-5 chip rounded-2xl p-4">
+        <div class="text-xs muted">Leading bot (highest conviction)</div>
+        <div id="winnerBox" class="text-lg font-semibold mt-1">—</div>
+        <div id="marketNote" class="text-xs muted mt-2">—</div>
+      </div>
+
+      <div class="mt-6">
+        <h3 class="font-semibold">Bots (live)</h3>
+        <div id="botsList" class="mt-3 grid sm:grid-cols-2 gap-3">
+          <div class="muted">Waiting for runner…</div>
         </div>
       </div>
     </div>
 
-    <!-- Learning impact -->
-    <div class="glass rounded-2xl p-6 mt-8">
-      <div class="flex items-center justify-between">
-        <h2 class="text-xl font-semibold">Learning impact over time</h2>
-        <span class="chip px-3 py-1 rounded-lg text-xs muted">Accuracy % by bot strategy</span>
-      </div>
-      <div class="mt-4">
-        <canvas id="impactChart" height="120"></canvas>
-      </div>
-    </div>
+    <!-- Right -->
+    <div class="lg:col-span-5 glass rounded-2xl p-6">
+      <h2 class="text-xl font-semibold">Live News Intelligence</h2>
+      <p class="text-sm muted mt-1">
+        Articles are continuously refreshed and bound to the active symbol.
+      </p>
 
-    <!-- Diagnostics -->
-    <div class="glass rounded-2xl p-6 mt-8">
-      <h2 class="text-xl font-semibold">Diagnostics</h2>
-      <div class="mt-4 flex flex-wrap gap-3">
-        <span id="apiChip" class="chip px-3 py-2 rounded-xl text-xs muted">API: —</span>
-        <span id="verChip" class="chip px-3 py-2 rounded-xl text-xs muted">Version: —</span>
-        <span id="speedChip" class="chip px-3 py-2 rounded-xl text-xs muted">Learning speed: —</span>
-        <span id="uniChip" class="chip px-3 py-2 rounded-xl text-xs muted">Universe: —</span>
-        <span id="runnerChip" class="chip px-3 py-2 rounded-xl text-xs muted">Runner: —</span>
+      <div id="newsBox" class="mt-4 space-y-3">
+        <div class="muted">—</div>
       </div>
     </div>
   </div>
 
-  <!-- Article modal -->
-  <div id="articleModal" class="hidden fixed inset-0 modal-bg">
-    <div class="max-w-2xl mx-auto mt-16 glass rounded-2xl p-6">
-      <div class="flex items-start justify-between gap-4">
-        <div>
-          <h3 class="text-xl font-semibold">Article impact explanation</h3>
-          <p id="articleTitle" class="text-sm muted mt-2"></p>
-        </div>
-        <button id="closeArticle" class="chip px-3 py-2 rounded-xl hover:opacity-90">Close</button>
-      </div>
-      <div class="mt-4 space-y-2">
-        <div id="impactLine1" class="text-sm"></div>
-        <div id="impactLine2" class="text-sm muted"></div>
-        <div id="impactMeta" class="text-xs muted mt-3"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Bot history modal -->
-  <div id="botModal" class="hidden fixed inset-0 modal-bg">
-    <div class="max-w-4xl mx-auto mt-10 glass rounded-2xl p-6">
-      <div class="flex items-start justify-between gap-4">
-        <div>
-          <h3 class="text-xl font-semibold">Bot trade history</h3>
-          <p id="botHeader" class="text-sm muted mt-2"></p>
-        </div>
-        <button id="closeBot" class="chip px-3 py-2 rounded-xl hover:opacity-90">Close</button>
-      </div>
-
-      <div class="mt-4 overflow-x-auto">
-        <table class="min-w-full text-sm">
-          <thead class="muted">
-            <tr class="text-left">
-              <th class="py-2 pr-3">Time</th>
-              <th class="py-2 pr-3">Side</th>
-              <th class="py-2 pr-3">Symbol</th>
-              <th class="py-2 pr-3">Qty</th>
-              <th class="py-2 pr-3">Price</th>
-              <th class="py-2 pr-3">Market</th>
-              <th class="py-2">Why (1–2 lines)</th>
-            </tr>
-          </thead>
-          <tbody id="botTbody">
-            <tr class="muted"><td class="py-3" colspan="7">Loading…</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
+</div>
 
 <script>
-  const $ = (id) => document.getElementById(id);
+const $ = id => document.getElementById(id);
 
-  let chart = null;
-  let lastSymbolForNews = "AAPL";
+let currentSymbol = null;
+let ws = null;
 
-  function showError(msg){
-    const el = $("topError");
-    el.textContent = msg;
-    el.classList.remove("hidden");
+function setWS(text){
+  $("wsStatus").textContent = text;
+}
+
+function providerBadge(provider){
+  if(provider === "mock"){
+    return '<span class="badge-mock px-2 py-1 rounded-lg text-xs font-semibold">MOCK</span>';
   }
-  function clearError(){
-    $("topError").classList.add("hidden");
-    $("topError").textContent = "";
-  }
+  return `<span class="badge-real px-2 py-1 rounded-lg text-xs font-semibold">${provider.toUpperCase()}</span>`;
+}
 
-  async function getJSON(url, opts){
-    const r = await fetch(url, opts);
-    const txt = await r.text();
-    try { return JSON.parse(txt); }
-    catch(e){ throw new Error(`API returned non-JSON. Check server route: ${url}`); }
-  }
-
-  function renderRunnerBar(status){
-    const box = $("runnerBar");
-    box.innerHTML = "";
-    const chips = [
-      `Runner: ${status.enabled ? "ON" : "OFF"} (${status.intervalSec}s)`,
-      `Market: ${status.market.open ? "OPEN" : "CLOSED"} (${status.market.reason})`,
-      `Next: ${status.nextSymbol || "—"}`
-    ];
-    chips.forEach(t => {
-      const s = document.createElement("span");
-      s.className = "chip px-3 py-2 rounded-xl text-xs muted";
-      s.textContent = t;
-      box.appendChild(s);
-    });
-  }
-
-  function renderBots(bots){
-    const box = $("botsList");
-    box.innerHTML = "";
-    for(const b of bots){
-      const div = document.createElement("button");
-      div.className = "chip rounded-2xl p-4 text-left hover:opacity-95";
-      div.innerHTML = `
-        <div class="flex items-center justify-between">
-          <div class="font-semibold">${b.label || b.strategy}</div>
-          <div class="text-xs muted">${b.horizon}</div>
-        </div>
-        <div class="mt-2 text-sm">
-          <span class="font-semibold">${b.signal}</span>
-          <span class="muted">• conf ${b.confidence ?? b.baseConfidence}</span>
-        </div>
-        <div class="mt-2 text-xs muted">${b.rationale || ""}</div>
-      `;
-      div.addEventListener("click", () => openBotHistory(b.strategy, b.label || b.strategy));
-      box.appendChild(div);
-    }
-  }
-
-  function renderTrades(items){
-    const tb = $("tradesTbody");
-    if(!items || !items.length){
-      tb.innerHTML = `<tr class="muted"><td class="py-3" colspan="7">—</td></tr>`;
-      return;
-    }
-    tb.innerHTML = items.map(t => `
-      <tr class="border-t border-white/5">
-        <td class="py-2 pr-3 muted">${new Date(t.ts).toLocaleString()}</td>
-        <td class="py-2 pr-3">${t.bot}</td>
-        <td class="py-2 pr-3">${t.side}</td>
-        <td class="py-2 pr-3">${t.symbol}</td>
-        <td class="py-2 pr-3">${Number(t.qty || 0).toFixed(3)}</td>
-        <td class="py-2 pr-3">$${Number(t.price || 0).toFixed(2)}</td>
-        <td class="py-2 muted">${t.rationale || ""}</td>
-      </tr>
-    `).join("");
-  }
-
-  function renderNews(pack){
-    const box = $("newsBox");
-    const items = pack?.items || [];
-    if(!items.length){
-      box.innerHTML = `<div class="muted">—</div>`;
-      return;
-    }
-    box.innerHTML = items.map((n, idx) => `
-      <button data-idx="${idx}" class="w-full text-left block chip rounded-2xl p-4 hover:opacity-95">
-        <div class="text-sm font-semibold">${(n.title || "").slice(0, 140)}</div>
-        <div class="text-xs muted mt-1">${n.source || ""} • ${n.publishedAt ? new Date(n.publishedAt).toLocaleString() : ""}</div>
-        <div class="text-xs muted mt-2">${(n.summary || "").slice(0, 160)}</div>
-      </button>
-    `).join("");
-
-    // click to explain
-    box.querySelectorAll("button[data-idx]").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        const i = Number(btn.getAttribute("data-idx"));
-        const n = items[i];
-        await openArticleExplain(lastSymbolForNews, n);
-      });
-    });
-  }
-
-  function renderImpactChart(byStrategy){
-    const strategies = Object.keys(byStrategy || {});
-    if(!strategies.length) return;
-
-    const daySet = new Set();
-    strategies.forEach(s => (byStrategy[s] || []).forEach(p => daySet.add(p.day)));
-    const days = Array.from(daySet).sort();
-
-    const datasets = strategies.map(s => {
-      const map = new Map((byStrategy[s] || []).map(p => [p.day, p.accuracy]));
-      return { label: s, data: days.map(d => map.has(d) ? map.get(d) : null), spanGaps: true, tension: 0.25 };
-    });
-
-    const ctx = $("impactChart").getContext("2d");
-    if(chart) chart.destroy();
-    chart = new Chart(ctx, {
-      type: "line",
-      data: { labels: days, datasets },
-      options: {
-        responsive: true,
-        plugins: { legend: { labels: { color: "rgba(229,231,235,.8)" } } },
-        scales: {
-          x: { ticks: { color: "rgba(229,231,235,.6)" }, grid: { color: "rgba(255,255,255,.06)" } },
-          y: { ticks: { color: "rgba(229,231,235,.6)" }, grid: { color: "rgba(255,255,255,.06)" }, suggestedMin: 0, suggestedMax: 100 }
-        }
-      }
-    });
-  }
-
-  async function loadDiagnostics(){
-    const health = await getJSON("/api/health");
-    $("apiChip").textContent = `API: ${JSON.stringify(health.apis)}`;
-    $("verChip").textContent = `Version: ${health.version}`;
-
-    const speed = await getJSON("/api/settings/learning-speed");
-    $("speedChip").textContent = `Learning speed: ${speed.mode} (${speed.evalAfterSec}s)`;
-    $("speedSelect").value = speed.mode === "accelerated" ? "accelerated" : "realtime";
-
-    const uni = await getJSON("/api/settings/universe");
-    $("uniChip").textContent = `Universe: ${uni.mode}${uni.mode==="custom" ? ` (${(uni.custom||[]).length})` : ""}`;
-    $("universeSelect").value = uni.mode;
-    $("customUniverseWrap").classList.toggle("hidden", uni.mode !== "custom");
-    $("customUniverse").value = (uni.custom || []).join(", ");
-
-    const runner = await getJSON("/api/runner/status");
-    $("runnerChip").textContent = `Runner: ${runner.enabled ? "ON" : "OFF"} • Market: ${runner.market.open ? "OPEN" : "CLOSED"}`;
-    renderRunnerBar(runner);
-  }
-
-  async function loadImpact(){
-    const impact = await getJSON("/api/learning/impact?days=14");
-    renderImpactChart(impact.byStrategy);
-  }
-
-  async function loadTrades(){
-    const t = await getJSON("/api/trades/recent?limit=25");
-    renderTrades(t.items || []);
-  }
-
-  async function runBots(){
-    clearError();
-    const symbol = $("symbolInput").value.trim().toUpperCase() || "AAPL";
-    lastSymbolForNews = symbol;
-
-    $("winnerBox").textContent = "Running…";
-    $("priceBox").textContent = "—";
-    $("chgBox").textContent = "—";
-    $("sentBox").textContent = "—";
-
-    const result = await getJSON(`/api/bots/${encodeURIComponent(symbol)}`);
-    $("winnerBox").textContent = result.winner || "—";
-
-    const f = result.features || {};
-    $("priceBox").textContent = f.price ? `$${Number(f.price).toFixed(2)}` : "—";
-    $("chgBox").textContent = (f.changePercent !== undefined) ? `${Number(f.changePercent).toFixed(2)}%` : "—";
-    $("sentBox").textContent = (f.avgSent !== undefined) ? `${Number(f.avgSent).toFixed(2)}` : "—";
-
-    const m = result.market || {};
-    $("marketBox").textContent = `Market: ${m.open ? "OPEN" : "CLOSED"} (${m.reason || ""}) • Trades allowed: ${result.tradesAllowed ? "YES" : "NO"}`;
-
-    renderBots(result.bots || []);
-
-    const news = await getJSON(`/api/news/${encodeURIComponent(symbol)}`);
-    renderNews(news);
-
-    await loadTrades();
-    await loadImpact();
-    await loadDiagnostics();
-  }
-
-  async function setSpeed(){
-    clearError();
-    const mode = $("speedSelect").value === "accelerated" ? "accelerated" : "realtime";
-    const payload = mode === "accelerated"
-      ? { mode: "accelerated", evalAfterSec: 30 }
-      : { mode: "realtime", evalAfterSec: 3600 };
-
-    await getJSON("/api/settings/learning-speed", {
-      method: "POST",
-      headers: { "Content-Type":"application/json" },
-      body: JSON.stringify(payload)
-    });
-    await loadDiagnostics();
-    await loadImpact();
-  }
-
-  async function saveUniverse(){
-    clearError();
-    const mode = $("universeSelect").value;
-    const raw = $("customUniverse").value || "";
-    const custom = raw.split(/[\n,]+/).map(x => x.trim()).filter(Boolean);
-
-    await getJSON("/api/settings/universe", {
-      method: "POST",
-      headers: { "Content-Type":"application/json" },
-      body: JSON.stringify({ mode, custom })
-    });
-    await loadDiagnostics();
-  }
-
-  async function openArticleExplain(symbol, article){
-    $("articleModal").classList.remove("hidden");
-    $("articleTitle").textContent = article.title || "";
-    $("impactLine1").textContent = "Thinking…";
-    $("impactLine2").textContent = "";
-    $("impactMeta").textContent = "";
-
-    try{
-      const out = await getJSON("/api/news/explain", {
-        method: "POST",
-        headers: { "Content-Type":"application/json" },
-        body: JSON.stringify({
-          symbol,
-          title: article.title || "",
-          summary: article.summary || ""
-        })
-      });
-      $("impactLine1").textContent = out.summary1 || "";
-      $("impactLine2").textContent = out.summary2 || "";
-      $("impactMeta").textContent = `Horizon: ${out.horizon} • Confidence: ${out.confidence}/100`;
-    } catch(e){
-      $("impactLine1").textContent = "Could not generate explanation.";
-      $("impactLine2").textContent = e.message;
-    }
-  }
-
-  async function openBotHistory(bot, label){
-    $("botModal").classList.remove("hidden");
-    $("botHeader").textContent = `${label} (${bot})`;
-    const tb = $("botTbody");
-    tb.innerHTML = `<tr class="muted"><td class="py-3" colspan="7">Loading…</td></tr>`;
-
-    try{
-      const out = await getJSON(`/api/trades/bot/${encodeURIComponent(bot)}?limit=200`);
-      const items = out.items || [];
-      if(!items.length){
-        tb.innerHTML = `<tr class="muted"><td class="py-3" colspan="7">No trades yet.</td></tr>`;
-        return;
-      }
-      tb.innerHTML = items.map(t => {
-        const f = t.features || {};
-        const market = (f.marketOpen === true) ? "OPEN" : (f.marketOpen === false) ? "CLOSED" : "—";
-        const why = (t.rationale || "").slice(0, 160);
-        const info = `Sent ${f.avgSent ?? "—"}, Chg ${f.changePercent ?? "—"}%`;
-        return `
-          <tr class="border-t border-white/5">
-            <td class="py-2 pr-3 muted">${new Date(t.ts).toLocaleString()}</td>
-            <td class="py-2 pr-3">${t.side}</td>
-            <td class="py-2 pr-3">${t.symbol}</td>
-            <td class="py-2 pr-3">${Number(t.qty || 0).toFixed(3)}</td>
-            <td class="py-2 pr-3">$${Number(t.price || 0).toFixed(2)}</td>
-            <td class="py-2 pr-3 muted">${market}</td>
-            <td class="py-2 muted">${why}<div class="text-xs muted mt-1">${info}</div></td>
-          </tr>
-        `;
-      }).join("");
-    } catch(e){
-      tb.innerHTML = `<tr class="muted"><td class="py-3" colspan="7">${e.message}</td></tr>`;
-    }
-  }
-
-  $("runBtn").addEventListener("click", () => runBots().catch(e => showError(e.message)));
-  $("refreshBtn").addEventListener("click", async () => {
-    try {
-      clearError();
-      await loadDiagnostics();
-      await loadTrades();
-      await loadImpact();
-    } catch(e){
-      showError(e.message);
-    }
+function renderBots(bots){
+  const box = $("botsList");
+  box.innerHTML = "";
+  bots.forEach(b => {
+    const el = document.createElement("div");
+    el.className = "chip rounded-2xl p-4";
+    el.innerHTML = `
+      <div class="flex items-center justify-between">
+        <div class="font-semibold">${b.label}</div>
+        <div class="text-xs muted">${b.horizon}</div>
+      </div>
+      <div class="mt-2 text-sm">
+        <b>${b.signal}</b> • conf ${b.confidence}
+      </div>
+      <div class="mt-2 text-xs muted">${b.rationale || ""}</div>
+    `;
+    box.appendChild(el);
   });
-  $("speedSelect").addEventListener("change", () => setSpeed().catch(e => showError(e.message)));
+}
 
-  $("universeSelect").addEventListener("change", () => {
-    const mode = $("universeSelect").value;
-    $("customUniverseWrap").classList.toggle("hidden", mode !== "custom");
-  });
+function renderNews(pack){
+  const box = $("newsBox");
+  const items = pack.items || [];
+  if(!items.length){
+    box.innerHTML = `<div class="muted">No news</div>`;
+    return;
+  }
 
-  $("saveUniverseBtn").addEventListener("click", () => saveUniverse().catch(e => showError(e.message)));
+  box.innerHTML = items.map(n => `
+    <div class="chip rounded-2xl p-4">
+      <div class="flex items-center justify-between gap-3">
+        <div class="text-sm font-semibold">${(n.title||"").slice(0,140)}</div>
+        ${providerBadge(pack.provider)}
+      </div>
+      <div class="text-xs muted mt-1">
+        ${n.source || ""} • ${n.publishedAt ? new Date(n.publishedAt).toLocaleString() : ""}
+      </div>
+      <div class="text-xs muted mt-2">${(n.summary||"").slice(0,160)}</div>
+    </div>
+  `).join("");
+}
 
-  $("closeArticle").addEventListener("click", () => $("articleModal").classList.add("hidden"));
-  $("closeBot").addEventListener("click", () => $("botModal").classList.add("hidden"));
+async function fetchSnapshot(symbol){
+  const res = await fetch(`/api/bots/${symbol}`);
+  const data = await res.json();
 
-  (async function init(){
-    try{
-      await loadDiagnostics();
-      await loadTrades();
-      await loadImpact();
-    }catch(e){
-      showError(e.message);
+  $("winnerBox").textContent = data.winner || "—";
+  $("marketNote").textContent =
+    `Market: ${data.market.open ? "OPEN" : "CLOSED"} (${data.market.reason}) • Trades allowed: ${data.tradesAllowed ? "YES" : "NO"}`;
+
+  const f = data.features || {};
+  $("priceBox").textContent = f.price ? `$${Number(f.price).toFixed(2)}` : "—";
+  $("chgBox").textContent = f.changePercent !== undefined ? `${Number(f.changePercent).toFixed(2)}%` : "—";
+  $("sentBox").textContent = f.avgSent !== undefined ? Number(f.avgSent).toFixed(2) : "—";
+
+  renderBots(data.bots || []);
+
+  const news = await fetch(`/api/news/${symbol}`).then(r=>r.json());
+  renderNews(news);
+}
+
+function connectWS(){
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => setWS("WS: live ✅");
+  ws.onclose = () => setWS("WS: closed ⚠️");
+  ws.onerror = () => setWS("WS: error ⚠️");
+
+  ws.onmessage = async ev => {
+    const msg = JSON.parse(ev.data);
+    $("lastEvent").textContent = msg.type;
+
+    if(msg.type === "carousel_tick"){
+      currentSymbol = msg.payload.symbol;
+      $("liveSymbol").textContent = currentSymbol;
+      $("marketChip").textContent =
+        `Market: ${msg.payload.market.open ? "OPEN" : "CLOSED"} (${msg.payload.market.reason})`;
+      await fetchSnapshot(currentSymbol);
     }
-  })();
+
+    if(msg.type === "bot_fight"){
+      await fetchSnapshot(msg.payload.symbol);
+    }
+  };
+}
+
+(async function init(){
+  const runner = await fetch("/api/runner/status").then(r=>r.json());
+  $("runnerChip").textContent = `Runner: ${runner.enabled ? "ON" : "OFF"} (${runner.intervalSec}s)`;
+  connectWS();
+})();
 </script>
-
 </body>
 </html>
