@@ -1,104 +1,120 @@
-const ws = new WebSocket(`wss://${location.host}/ws/war-room`);
+const $ = (id) => document.getElementById(id);
 
-const botsEl = document.getElementById("bots");
-const tradesEl = document.getElementById("trades");
-const logEl = document.getElementById("combat-log");
-const symbolEl = document.getElementById("active-symbol");
-
-let chart, priceSeries;
-let symbols = [];
-let symbolIndex = 0;
-let currentSymbol = null;
-
-/* ---------------- WS STATUS ---------------- */
-ws.onopen = () => {
-  document.getElementById("ws-status").innerText = "WS: CONNECTED";
-};
-
-ws.onclose = () => {
-  document.getElementById("ws-status").innerText = "WS: DISCONNECTED";
-};
-
-/* ---------------- WS MESSAGES ---------------- */
-ws.onmessage = (e) => {
-  const { type, payload } = JSON.parse(e.data);
-
-  if (type === "symbols") symbols = payload;
-  if (type === "portfolio") renderBots(payload);
-  if (type === "trade") renderTrade(payload);
-  if (type === "reasoning") renderLog(payload);
-  if (type === "sentiment") updateChart(payload);
-};
-
-/* ---------------- BOT SCOREBOARD ---------------- */
-function renderBots(snapshot) {
-  botsEl.innerHTML = "";
-
-  snapshot.bots
-    .sort((a, b) => (b.cash + (snapshot.positions[b.strategy]?.length || 0)) -
-                    (a.cash + (snapshot.positions[a.strategy]?.length || 0)))
-    .forEach((b, i) => {
-      const equity = b.cash;
-      const progress = Math.min(100, (equity / 150000) * 100);
-
-      const div = document.createElement("div");
-      div.className = "bot-card";
-      div.innerHTML = `
-        <div class="bot-title">${i + 1}. ${b.strategy.toUpperCase()}</div>
-        <div class="bot-meta">Equity: $${equity.toFixed(2)}</div>
-        <div class="progress"><div class="progress-inner" style="width:${progress}%"></div></div>
-      `;
-      botsEl.appendChild(div);
-    });
+async function getJSON(url, opts) {
+  const r = await fetch(url, opts);
+  const txt = await r.text();
+  try { return JSON.parse(txt); }
+  catch { throw new Error(`Non-JSON from ${url}`); }
 }
 
-/* ---------------- TRADE LEDGER ---------------- */
-function renderTrade(t) {
+function setWsStatus(text) {
+  $("wsStatus").textContent = text;
+}
+
+function pushEventLine(text) {
+  const box = $("eventStream");
+  if (box.querySelector(".muted") && box.children.length === 1) box.innerHTML = "";
+
   const div = document.createElement("div");
-  div.className = "trade";
-  div.innerHTML = `
-    <div class="${t.side === "BUY" ? "buy" : "sell"}">
-      ${t.strategy.toUpperCase()} ${t.side} ${t.symbol}
-    </div>
-    <div>${t.qty.toFixed(4)} @ $${t.price.toFixed(2)}</div>
-    <div style="opacity:.6">${t.note}</div>
-  `;
-  tradesEl.prepend(div);
+  div.className = "chip rounded-xl px-3 py-2 text-xs";
+  div.textContent = text;
+  box.prepend(div);
+
+  // keep last 80
+  while (box.children.length > 80) box.removeChild(box.lastChild);
 }
 
-/* ---------------- COMBAT LOG ---------------- */
-function renderLog({ ts, strategy, rationale }) {
-  const div = document.createElement("div");
-  div.className = "log-line";
-  div.innerText = `[${new Date(ts).toLocaleTimeString()}] ${strategy}: ${rationale}`;
-  logEl.prepend(div);
+function renderTrades(items) {
+  const tb = $("tradeStreamBody");
+  if (!items || !items.length) {
+    tb.innerHTML = `<tr class="muted"><td class="py-3" colspan="7">—</td></tr>`;
+    return;
+  }
+  tb.innerHTML = items.slice(0, 25).map(t => `
+    <tr class="border-t border-white/5">
+      <td class="py-2 pr-3 muted">${new Date(t.ts).toLocaleString()}</td>
+      <td class="py-2 pr-3">${t.bot}</td>
+      <td class="py-2 pr-3">${t.side}</td>
+      <td class="py-2 pr-3">${t.symbol}</td>
+      <td class="py-2 pr-3">${Number(t.qty || 0).toFixed(3)}</td>
+      <td class="py-2 pr-3">$${Number(t.price || 0).toFixed(2)}</td>
+      <td class="py-2 muted">${t.rationale || ""}</td>
+    </tr>
+  `).join("");
 }
 
-/* ---------------- CHART ---------------- */
-function initChart(symbol) {
-  currentSymbol = symbol;
-  symbolEl.innerText = `Symbol: ${symbol}`;
+function renderBankroll(items) {
+  const box = $("bankrollBox");
+  if (!items || !items.length) {
+    box.innerHTML = `<div class="muted">—</div>`;
+    return;
+  }
 
-  document.getElementById("chart").innerHTML = "";
-  chart = LightweightCharts.createChart(document.getElementById("chart"), {
-    layout: { background: { color: "#0b0e19" }, textColor: "#9bb4ff" }
-  });
-
-  priceSeries = chart.addLineSeries({ color: "#9bb4ff", lineWidth: 2 });
-
-  fetch(`/api/history/${symbol}`)
-    .then(r => r.json())
-    .then(j => j.ok && priceSeries.setData(j.data));
+  box.innerHTML = items.map(p => {
+    const cash = Number(p.cash);
+    const goal = Number(p.goal);
+    const pct = Math.max(0, Math.min(100, (cash / goal) * 100));
+    return `
+      <div class="chip rounded-2xl p-4">
+        <div class="flex items-center justify-between">
+          <div class="font-semibold">${p.bot}</div>
+          <div class="text-xs muted">$${cash.toFixed(2)}</div>
+        </div>
+        <div class="mt-3 h-2 rounded-full bg-white/10 overflow-hidden">
+          <div style="width:${pct}%" class="h-2 bg-gradient-to-r from-indigo-500 to-fuchsia-500"></div>
+        </div>
+        <div class="mt-2 text-xs muted">Progress to $${goal.toFixed(0)} • ${pct.toFixed(1)}%</div>
+      </div>
+    `;
+  }).join("");
 }
 
-function updateChart({ symbol, price }) {
-  if (symbol !== currentSymbol) return;
-  priceSeries.update({ time: Date.now() / 1000, value: price });
+async function refreshWarRoom() {
+  const p = await getJSON("/api/portfolios");
+  renderBankroll(p.items || []);
+
+  const t = await getJSON("/api/trades/recent?limit=25");
+  renderTrades(t.items || []);
 }
 
-/* ---------------- SYMBOL CAROUSEL ---------------- */
-setInterval(() => {
-  if (!symbols.length) return;
-  symbolIndex = (symbolIndex + 1) % symbols.length;
-  initChart(symbols[symbolIndex]);
-}, 5000);
+function connectWS() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => setWsStatus("WS: live ✅");
+  ws.onclose = () => setWsStatus("WS: closed (refresh) ⚠️");
+  ws.onerror = () => setWsStatus("WS: error ⚠️");
+
+  ws.onmessage = async (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      $("lastEvent").textContent = `${msg.type} • ${new Date(msg.ts).toLocaleTimeString()}`;
+
+      if (msg.type === "carousel_tick") {
+        $("carouselSymbol").textContent = msg.payload?.symbol || "—";
+        pushEventLine(`♻ Carousel: ${msg.payload?.symbol}`);
+      }
+
+      if (msg.type === "bot_fight") {
+        const sym = msg.payload?.symbol;
+        const winner = msg.payload?.winner;
+        pushEventLine(`⚔️ Fight: ${sym} • winner=${winner}`);
+        await refreshWarRoom();
+      }
+
+      if (msg.type === "learning_evaluated") {
+        pushEventLine(`🧠 Learning evaluated: ${msg.payload?.evaluated || 0} samples`);
+      }
+    } catch {}
+  };
+
+  return ws;
+}
+
+(async function init() {
+  await refreshWarRoom();
+  connectWS();
+
+  // keep the page fresh even if no WS events
+  setInterval(() => refreshWarRoom().catch(() => {}), 15000);
+})();
