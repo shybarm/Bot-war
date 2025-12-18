@@ -60,7 +60,7 @@ function renderBankroll(items) {
     const goal = Number(p.goal);
     const pct = Math.max(0, Math.min(100, (cash / goal) * 100));
 
-    // IMPORTANT: clickable button + data attributes
+    // CLICKABLE button + data attributes
     return `
       <button
         class="chip w-full text-left rounded-2xl p-4 hover:opacity-95 focus:outline-none"
@@ -112,7 +112,7 @@ async function refreshWarRoom() {
 }
 
 /* -----------------------------
-   Bot Drawer (Phase 3)
+   Bot Drawer (Phase 3+4)
 ------------------------------ */
 let drawerOpen = false;
 let activeDrawerBot = null;
@@ -141,26 +141,16 @@ function verdictChip(v) {
 }
 
 /**
- * Optional verdicts endpoint (added later in Phase 4 server.js)
- * - If endpoint doesn't exist or fails: gracefully fallback to PENDING.
- *
- * Expected shape (if exists):
- * {
- *   bot: "sp500_long",
- *   verdictByTradeId: { "123": "WIN", "124": "PENDING" },
- *   stats: { win: 10, loss: 7, pending: 4 }
- * }
+ * Bot-level learning stats endpoint (Phase 4 server.js)
+ * GET /api/learning/verdicts?bot=...
+ * -> provides stats for win-rate KPI (not trade-level mapping).
  */
-async function loadVerdictsForBot(bot) {
+async function loadBotVerdictStats(bot) {
   try {
     const out = await getJSON(`/api/learning/verdicts?bot=${encodeURIComponent(bot)}`);
-    if (!out || typeof out !== "object") return { verdictByTradeId: {}, stats: null };
-    return {
-      verdictByTradeId: out.verdictByTradeId || {},
-      stats: out.stats || null
-    };
+    return out && out.stats ? out.stats : null;
   } catch {
-    return { verdictByTradeId: {}, stats: null };
+    return null;
   }
 }
 
@@ -174,7 +164,21 @@ async function loadBotPortfolio(bot) {
   }
 }
 
-function renderDrawerHeader({ bot, label, portfolio, tradesCount, stats }) {
+function computeWinRateFromTrades(items) {
+  // Prefer trade-level verdicts for KPI if present
+  let win = 0, loss = 0, pending = 0;
+  for (const t of (items || [])) {
+    const v = String(t.learningVerdict || "PENDING").toUpperCase();
+    if (v === "WIN") win++;
+    else if (v === "LOSS") loss++;
+    else pending++;
+  }
+  const denom = win + loss;
+  const wr = denom > 0 ? Math.round((win / denom) * 100) : null;
+  return { win, loss, pending, winRate: wr };
+}
+
+function renderDrawerHeader({ bot, label, portfolio, tradesCount, tradeKpi, statsFallback }) {
   $("drawerTitle").textContent = label || bot;
   $("drawerSub").textContent = bot ? `Strategy key: ${bot}` : "—";
 
@@ -186,16 +190,19 @@ function renderDrawerHeader({ bot, label, portfolio, tradesCount, stats }) {
 
   $("drawerTradesCount").textContent = String(tradesCount ?? "—");
 
-  if (stats && (stats.win + stats.loss + stats.pending) > 0) {
-    const denom = (stats.win + stats.loss);
-    const wr = denom > 0 ? Math.round((stats.win / denom) * 100) : null;
-    $("drawerWinRate").textContent = (wr === null) ? "—" : `${wr}%`;
-  } else {
-    $("drawerWinRate").textContent = "—";
+  // Win rate priority:
+  // 1) trade-level verdict KPI (best UX)
+  // 2) server stats fallback
+  let wr = (tradeKpi && tradeKpi.winRate != null) ? tradeKpi.winRate : null;
+
+  if (wr == null && statsFallback && (statsFallback.win + statsFallback.loss) > 0) {
+    wr = Math.round((statsFallback.win / (statsFallback.win + statsFallback.loss)) * 100);
   }
+
+  $("drawerWinRate").textContent = (wr == null) ? "—" : `${wr}%`;
 }
 
-function renderDrawerTrades(items, verdictByTradeId) {
+function renderDrawerTrades(items) {
   const tb = $("drawerTradesBody");
   if (!items || !items.length) {
     tb.innerHTML = `<tr class="muted"><td class="py-3" colspan="7">No trades yet.</td></tr>`;
@@ -203,7 +210,7 @@ function renderDrawerTrades(items, verdictByTradeId) {
   }
 
   tb.innerHTML = items.map(t => {
-    const v = (verdictByTradeId && t.id != null) ? verdictByTradeId[String(t.id)] : null;
+    const v = t.learningVerdict || "PENDING";
     const why = (t.rationale || "").slice(0, 170);
     return `
       <tr class="border-t border-white/5">
@@ -234,28 +241,33 @@ async function openBotDrawer(bot, label) {
   $("drawerLastUpdated").textContent = "—";
   $("drawerTradesBody").innerHTML = `<tr class="muted"><td class="py-3" colspan="7">Loading…</td></tr>`;
 
-  // Fetch portfolio + trades + (optional) verdicts
-  const [portfolio, tradesOut, verdictsOut] = await Promise.all([
+  // Fetch portfolio + trades + stats
+  const [portfolio, tradesOut, statsFallback] = await Promise.all([
     loadBotPortfolio(bot),
-    getJSON(`/api/trades/bot/${encodeURIComponent(bot)}?limit=250`).catch(() => ({ items: [] })),
-    loadVerdictsForBot(bot)
+    getJSON(`/api/trades/bot/${encodeURIComponent(bot)}?limit=300`).catch(() => ({ items: [] })),
+    loadBotVerdictStats(bot)
   ]);
 
   const items = (tradesOut && tradesOut.items) ? tradesOut.items : [];
-  const verdictByTradeId = verdictsOut.verdictByTradeId || {};
-  const stats = verdictsOut.stats || null;
+  const tradeKpi = computeWinRateFromTrades(items);
 
   renderDrawerHeader({
     bot,
     label,
     portfolio,
     tradesCount: items.length,
-    stats
+    tradeKpi,
+    statsFallback
   });
 
-  $("drawerSub").textContent = "Full trade history + learning verdicts (when available)";
+  // Drawer subtitle: make it explicit that verdicts are real and time-delayed
+  $("drawerSub").textContent =
+    "Full trade history + learning verdicts (evaluated after horizon)";
+
   $("drawerLastUpdated").textContent = `Updated: ${new Date().toLocaleTimeString()}`;
-  renderDrawerTrades(items, verdictByTradeId);
+
+  // Render trade table
+  renderDrawerTrades(items);
 }
 
 /* -----------------------------
@@ -289,7 +301,7 @@ function connectWS() {
         // Refresh core panels
         await refreshWarRoom();
 
-        // If drawer is open, refresh its content to stay “command-center live”
+        // If drawer is open, refresh its content (keeps drawer “alive”)
         if (drawerOpen && activeDrawerBot) {
           openBotDrawer(activeDrawerBot, activeDrawerLabel).catch(() => {});
         }
@@ -298,7 +310,7 @@ function connectWS() {
       if (msg.type === "learning_evaluated") {
         pushEventLine(`🧠 Learning evaluated: ${msg.payload?.evaluated || 0} samples`);
 
-        // If drawer is open, attempt to refresh verdicts (endpoint may be added later)
+        // Refresh drawer so verdict chips can flip from PENDING -> WIN/LOSS
         if (drawerOpen && activeDrawerBot) {
           openBotDrawer(activeDrawerBot, activeDrawerLabel).catch(() => {});
         }
