@@ -1,284 +1,308 @@
-/**
- * AI Trading Arena - War Room Edition (Stable WS + Carousel + Simple History)
- * - WebSocket path: /ws/war-room
- * - Stock failover: Finnhub -> TwelveData
- * - News failover: NewsData -> NewsAPI
- */
-
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import fetch from "node-fetch";
 import path from "path";
-import { fileURLToPath } from "url";
-import { WebSocketServer } from "ws";
 
 import {
   initDb,
-  getBotAccounts,
-  getBotPositions,
-  recordTrade,
-  getRecentTrades
+  insertLearningEvent,
+  getHistoricalPatterns,
+  calculateAccuracyFromPatterns,
+  getLearningImpact,
+  hasDb,
 } from "./db.js";
 
 dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT) || 8080;
-const APP_VERSION = "arena-warroom-v3.1";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
+// ---------------------------
+// BASIC SETUP
+// ---------------------------
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static("public"));
 
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
-
-// -------------------------
-// STOCK FAILOVER
-// -------------------------
-async function finnhubQuote(symbol) {
-  const key = process.env.FINNHUB_API_KEY;
-  if (!key) throw new Error("FINNHUB_API_KEY missing");
-  const r = await fetch(`https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${key}`);
-  const j = await r.json();
-  if (!j || !j.c) throw new Error("Finnhub returned no price");
-  return { provider: "finnhub", price: j.c, changePercent: j.dp ?? 0, change: j.d ?? 0 };
-}
-
-async function twelveDataQuote(symbol) {
-  const key = process.env.TWELVEDATA_API_KEY;
-  if (!key) throw new Error("TWELVEDATA_API_KEY missing");
-  const r = await fetch(`https://api.twelvedata.com/price?symbol=${symbol}&apikey=${key}`);
-  const j = await r.json();
-  if (!j || !j.price) throw new Error("TwelveData returned no price");
-  return { provider: "twelvedata", price: Number(j.price), changePercent: 0, change: 0 };
-}
-
-async function getStockQuote(symbol) {
-  try {
-    return await finnhubQuote(symbol);
-  } catch {
-    return await twelveDataQuote(symbol);
-  }
-}
-
-// -------------------------
-// NEWS FAILOVER
-// -------------------------
-function sentimentScore(text = "") {
-  const pos = ["gain", "surge", "strong", "profit", "upgrade", "beats", "record"];
-  const neg = ["drop", "weak", "loss", "downgrade", "fall", "miss", "lawsuit"];
-  const t = text.toLowerCase();
-  let s = 0;
-  for (const w of pos) if (t.includes(w)) s += 0.1;
-  for (const w of neg) if (t.includes(w)) s -= 0.1;
-  return Math.max(-1, Math.min(1, s));
-}
-
-async function newsdataNews(symbol) {
-  const key = process.env.NEWSDATA_API_KEY;
-  if (!key) throw new Error("NEWSDATA_API_KEY missing");
-  const r = await fetch(`https://newsdata.io/api/1/news?apikey=${key}&q=${symbol}&language=en`);
-  const j = await r.json();
-  if (!j || !j.results) throw new Error("NewsData failed");
-  return j.results.slice(0, 8).map(n => ({
-    title: n.title,
-    description: n.description,
-    url: n.link,
-    publishedAt: n.pubDate,
-    provider: "newsdata",
-    sentiment: sentimentScore((n.title || "") + " " + (n.description || ""))
-  }));
-}
-
-async function newsApiNews(symbol) {
-  const key = process.env.NEWSAPI_BACKUP_KEY;
-  if (!key) throw new Error("NEWSAPI_BACKUP_KEY missing");
-  const r = await fetch(
-    `https://newsapi.org/v2/everything?q=${symbol}&language=en&sortBy=relevancy&apiKey=${key}`
-  );
-  const j = await r.json();
-  if (!j || !j.articles) throw new Error("NewsAPI failed");
-  return j.articles.slice(0, 8).map(a => ({
-    title: a.title,
-    description: a.description,
-    url: a.url,
-    publishedAt: a.publishedAt,
-    provider: "newsapi",
-    sentiment: sentimentScore((a.title || "") + " " + (a.description || ""))
-  }));
-}
-
-async function getNewsBundle(symbol) {
-  try {
-    return await newsdataNews(symbol);
-  } catch {
-    return await newsApiNews(symbol);
-  }
-}
-
-// -------------------------
-// BOT LOGIC
-// -------------------------
-function computeFeatures(quote, news) {
-  const avgSent = news.reduce((a, n) => a + (n.sentiment || 0), 0) / (news.length || 1);
-  return { avgSent, changePercent: quote.changePercent ?? 0 };
-}
-
-function botSignal(strategy, f) {
-  if (strategy === "sp500_long") {
-    if (f.avgSent > 0.15) return { signal: "BUY", rationale: "Macro sentiment strong" };
-    if (f.avgSent < -0.15) return { signal: "SELL", rationale: "Macro sentiment negative" };
-    return { signal: "HOLD", rationale: "Macro sentiment neutral" };
-  }
-  if (strategy === "market_swing") {
-    if (f.avgSent > 0.1 && f.changePercent > 0) return { signal: "BUY", rationale: "Sentiment + momentum alignment" };
-    if (f.avgSent < -0.1 && f.changePercent < 0) return { signal: "SELL", rationale: "Momentum breakdown" };
-    return { signal: "HOLD", rationale: "Swing conditions unclear" };
-  }
-  if (f.changePercent > 1.2) return { signal: "BUY", rationale: "Intraday breakout" };
-  if (f.changePercent < -1.2) return { signal: "SELL", rationale: "Intraday breakdown" };
-  return { signal: "HOLD", rationale: "Flat intraday tape" };
-}
-
-function buyBudgetPct(strategy) {
-  if (strategy === "day_trade") return 0.30;
-  if (strategy === "market_swing") return 0.20;
-  return 0.15;
-}
-
-// -------------------------
-// Start HTTP server
-// -------------------------
-const server = app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 War Room server running on PORT ${PORT}`);
+// Serve homepage
+app.get("/", (req, res) => {
+  res.sendFile(path.resolve("public", "index.html"));
 });
 
-// -------------------------
-// WebSocket server on /ws/war-room
-// -------------------------
-const wss = new WebSocketServer({ server, path: "/ws/war-room" });
+// ============================================
+// HELPERS: PRICES + NEWS + ANALYSIS
+// ============================================
 
-function broadcast(type, payload) {
-  const msg = JSON.stringify({ type, payload });
-  for (const client of wss.clients) {
-    if (client.readyState === 1) client.send(msg);
+async function getStockPrice(symbol) {
+  const apiKey = process.env.FINNHUB_API_KEY;
+
+  if (!apiKey) {
+    return {
+      price: Math.random() * 500 + 100,
+      change: Math.random() * 10 - 5,
+      changePercent: Math.random() * 5 - 2.5,
+      high: null,
+      low: null,
+      open: null,
+      previousClose: null,
+    };
+  }
+
+  try {
+    const response = await fetch(
+      `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${apiKey}`
+    );
+    const data = await response.json();
+
+    return {
+      price: data.c,
+      change: data.d,
+      changePercent: data.dp,
+      high: data.h,
+      low: data.l,
+      open: data.o,
+      previousClose: data.pc,
+    };
+  } catch (error) {
+    console.error(`Error fetching price for ${symbol}:`, error.message);
+    return null;
   }
 }
 
-// carousel memory
-const tradedSymbols = [];
-const MAX_SYMBOLS = 20;
+function getMockNews(symbol) {
+  const templates = [
+    { title: `${symbol} reports strong Q4 earnings`, sentiment: 0.8 },
+    { title: `Analysts upgrade ${symbol} to Buy`, sentiment: 0.6 },
+    { title: `${symbol} announces new product line`, sentiment: 0.5 },
+    { title: `${symbol} faces regulatory scrutiny`, sentiment: -0.4 },
+    { title: `Market volatility affects ${symbol}`, sentiment: -0.2 },
+  ];
 
-// -------------------------
-// History endpoint (simple line)
-// -------------------------
-app.get("/api/history/:symbol", async (req, res) => {
-  const symbol = req.params.symbol.toUpperCase();
+  return templates.map((t) => ({
+    ...t,
+    description: `News about ${symbol}`,
+    url: "#",
+    publishedAt: new Date().toISOString(),
+    source: "Mock News",
+  }));
+}
+
+function analyzeSentiment(text) {
+  const positive = [
+    "surge", "growth", "profit", "beat", "strong",
+    "record", "upgrade", "bullish", "gain", "rise",
+  ];
+  const negative = [
+    "drop", "loss", "miss", "weak", "concern",
+    "downgrade", "bearish", "fall", "decline",
+  ];
+
+  const lowerText = (text || "").toLowerCase();
+  let score = 0;
+
+  positive.forEach((word) => {
+    if (lowerText.includes(word)) score += 0.1;
+  });
+  negative.forEach((word) => {
+    if (lowerText.includes(word)) score -= 0.1;
+  });
+
+  return Math.max(-1, Math.min(1, score));
+}
+
+async function getCompanyNews(symbol) {
+  const apiKey = process.env.NEWS_API_KEY;
+  if (!apiKey) return getMockNews(symbol);
+
   try {
-    const q = await getStockQuote(symbol);
-    const now = Math.floor(Date.now() / 1000);
-    const data = [];
-    for (let i = 60; i >= 1; i--) {
-      data.push({ time: now - i, value: q.price + Math.sin(i / 3) * 0.6 });
-    }
-    res.json({ ok: true, data, sentiment: [] });
+    const today = new Date().toISOString().split("T")[0];
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split("T")[0];
+
+    const response = await fetch(
+      `https://newsapi.org/v2/everything?q=${symbol}&from=${weekAgo}&to=${today}&sortBy=relevancy&apiKey=${apiKey}`
+    );
+
+    const data = await response.json();
+
+    return (
+      data.articles?.slice(0, 10).map((article) => ({
+        title: article.title,
+        description: article.description,
+        url: article.url,
+        publishedAt: article.publishedAt,
+        source: article.source?.name || "Unknown",
+        sentiment: analyzeSentiment(
+          (article.title || "") + " " + (article.description || "")
+        ),
+      })) || []
+    );
+  } catch (error) {
+    console.error(`Error fetching news for ${symbol}:`, error.message);
+    return getMockNews(symbol);
+  }
+}
+
+function generateBasicAnalysis(symbol, news, priceData) {
+  const sentimentScore =
+    news.reduce((sum, n) => sum + (n.sentiment || 0), 0) / (news.length || 1);
+  const priceChange = priceData?.changePercent || 0;
+
+  let signal = "HOLD";
+  let confidence = 50;
+
+  if (sentimentScore > 0.3 && priceChange > 2) {
+    signal = "BUY"; confidence = 75;
+  } else if (sentimentScore > 0.1 && priceChange > 0) {
+    signal = "BUY"; confidence = 65;
+  } else if (sentimentScore < -0.3 && priceChange < -2) {
+    signal = "SELL"; confidence = 75;
+  } else if (sentimentScore < -0.1 && priceChange < 0) {
+    signal = "SELL"; confidence = 65;
+  }
+
+  return {
+    signal,
+    confidence,
+    reasoning: `Based on sentiment (${sentimentScore.toFixed(2)}) and price trend (${priceChange.toFixed(2)}%)`,
+    targetPrice: priceData.price * (signal === "BUY" ? 1.05 : 0.95),
+    stopLoss: priceData.price * (signal === "BUY" ? 0.95 : 1.05),
+    timeHorizon: Math.abs(priceChange) > 3 ? "short" : "medium",
+  };
+}
+
+// ============================================
+// API ENDPOINTS
+// ============================================
+
+// Fast popular stocks (no AI, no news) for UI speed
+app.get("/api/popular-fast", async (req, res) => {
+  try {
+    const symbols = ["AAPL", "NVDA", "TSLA", "MSFT", "GOOGL", "META"];
+
+    const data = await Promise.all(symbols.map(async (symbol) => {
+      const priceData = await getStockPrice(symbol);
+      if (!priceData) return null;
+
+      const change = priceData.changePercent || 0;
+      const signal = change > 1 ? "BUY" : change < -1 ? "SELL" : "HOLD";
+      const confidence = Math.min(90, Math.max(50, Math.round(Math.abs(change) * 15 + 50)));
+
+      return {
+        symbol,
+        price: priceData.price,
+        change,
+        signal,
+        confidence,
+        reasoning: "Fast signal (no AI) for quick overview",
+      };
+    }));
+
+    res.json(data.filter(Boolean));
   } catch (e) {
-    res.json({ ok: false, error: e.message });
+    res.status(500).json({ error: e.message });
   }
 });
 
-// -------------------------
-// War Room endpoints
-// -------------------------
-async function buildPortfolioSnapshot() {
-  const bots = await getBotAccounts();
-  const positions = {};
-  for (const b of bots) positions[b.strategy] = await getBotPositions(b.strategy);
-  return { bots, positions };
-}
-
-app.get("/api/war/bots", async (req, res) => res.json(await buildPortfolioSnapshot()));
-app.get("/api/war/trades", async (req, res) => res.json({ ok: true, rows: await getRecentTrades({ limit: 50 }) }));
-app.get("/api/war/symbols", (req, res) => res.json({ ok: true, symbols: tradedSymbols }));
-
-// -------------------------
-// Bot Fight
-// -------------------------
-app.get("/api/fight/:symbol", async (req, res) => {
+// News endpoint separated from analysis (reliable UI)
+app.get("/api/news/:symbol", async (req, res) => {
   try {
-    const symbol = req.params.symbol.toUpperCase();
-    const quote = await getStockQuote(symbol);
+    const news = await getCompanyNews(req.params.symbol);
+    res.json({ news: (news || []).slice(0, 10) });
+  } catch (e) {
+    res.status(500).json({ error: e.message, news: [] });
+  }
+});
 
-    let news = [];
-    try {
-      news = await getNewsBundle(symbol);
-    } catch {
-      news = [];
-    }
+// Learning impact over time (NEW)
+app.get("/api/learning/impact/:symbol", async (req, res) => {
+  try {
+    const symbol = String(req.params.symbol || "").toUpperCase().trim();
+    const strategy = req.query.strategy ? String(req.query.strategy).trim() : null;
+    const bucket = req.query.bucket ? String(req.query.bucket).trim() : "hour";
+    const limit = req.query.limit ? Number(req.query.limit) : 72;
 
-    const f = computeFeatures(quote, news);
+    if (!symbol) return res.status(400).json({ ok: false, error: "Missing symbol" });
 
-    const bots = await getBotAccounts();
-    const map = Object.fromEntries(bots.map(b => [b.strategy, b]));
+    const impact = await getLearningImpact({ symbol, strategy, bucket, limit });
 
-    const strategies = ["sp500_long", "market_swing", "day_trade"];
-    const trades = [];
-
-    for (const s of strategies) {
-      const sig = botSignal(s, f);
-      const acc = map[s];
-      const note = `${sig.rationale} | Sentiment ${f.avgSent.toFixed(2)}`;
-
-      broadcast("reasoning", { ts: Date.now(), strategy: s, rationale: sig.rationale });
-
-      if (sig.signal === "BUY") {
-        const budget = acc.cash * buyBudgetPct(s);
-        if (budget > 50) {
-          const qty = budget / quote.price;
-          await recordTrade({ strategy: s, symbol, side: "BUY", qty, price: quote.price, note });
-          trades.push({ strategy: s, symbol, side: "BUY", qty, price: quote.price, note });
-        }
-      }
-
-      if (sig.signal === "SELL") {
-        const pos = await getBotPositions(s);
-        const p = pos.find(x => x.symbol === symbol);
-        if (p && p.qty > 0) {
-          await recordTrade({ strategy: s, symbol, side: "SELL", qty: p.qty, price: quote.price, note });
-          trades.push({ strategy: s, symbol, side: "SELL", qty: p.qty, price: quote.price, note });
-        }
-      }
-    }
-
-    // update carousel
-    if (!tradedSymbols.includes(symbol)) {
-      tradedSymbols.unshift(symbol);
-      if (tradedSymbols.length > MAX_SYMBOLS) tradedSymbols.pop();
-    }
-
-    // broadcast events
-    for (const t of trades) broadcast("trade", t);
-    broadcast("symbols", tradedSymbols);
-    broadcast("sentiment", { symbol, price: quote.price, sentiment: f.avgSent, ts: Date.now() });
-    broadcast("portfolio", await buildPortfolioSnapshot());
-
-    res.json({ ok: true, symbol, quote, features: f, news, trades, version: APP_VERSION });
+    res.json({
+      ok: true,
+      hasDb: hasDb(),
+      symbol,
+      strategy: strategy || "ALL",
+      bucket: bucket === "day" ? "day" : "hour",
+      limit,
+      ...impact,
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-// -------------------------
-// Init DB (don’t crash the app if DB init fails)
-// -------------------------
-(async function start() {
+// Persist learning outcome (writes to Postgres)
+app.post("/api/learn", async (req, res) => {
+  try {
+    const { symbol, signal, priceAtSignal, priceAfter, strategy, horizon } = req.body;
+
+    if (!symbol || !signal || typeof priceAtSignal !== "number" || typeof priceAfter !== "number") {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const row = await insertLearningEvent({
+      symbol: String(symbol).toUpperCase().trim(),
+      signal: String(signal).toUpperCase().trim(),
+      priceAtSignal,
+      priceAfter,
+      strategy: strategy ? String(strategy).trim() : "global",
+      horizon: horizon ? String(horizon).trim() : "medium",
+    });
+
+    const patterns = await getHistoricalPatterns(String(symbol).toUpperCase().trim(), 50);
+
+    res.json({
+      success: true,
+      stored: !!row,
+      event: row,
+      totalPatterns: patterns.length,
+      historicalAccuracy: calculateAccuracyFromPatterns(patterns),
+      persistence: hasDb() ? "postgres" : "none",
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Health
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "healthy",
+    timestamp: new Date().toISOString(),
+    apis: {
+      finnhub: !!process.env.FINNHUB_API_KEY,
+      newsApi: !!process.env.NEWS_API_KEY,
+      openai: !!process.env.OPENAI_API_KEY,
+      postgres: hasDb(),
+    },
+    version: "learning-impact-v1",
+  });
+});
+
+// ---------------------------
+// START SERVER (DB init should never block startup)
+// ---------------------------
+async function start() {
   try {
     await initDb();
-    console.log("✅ DB Ready");
   } catch (e) {
-    console.error("❌ DB init error:", e.message);
+    console.error("⚠️ DB init failed, starting server anyway:", e.message);
   }
-})();
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+  });
+}
+
+start();
