@@ -1,12 +1,6 @@
 /**
- * server.js — AI Trading Arena / Bot War Platform (Unified)
- * Restores:
- *  - Runner loop + WS events
- *  - /api/runner/status, /api/portfolios, /api/trades/*, /api/bots/:symbol
- * Adds/keeps:
- *  - General news (non stock-market), with strong fallback
- *  - /api/news/impact => impacted tickers + Evidence Drawer payload
- *  - Events persisted in Postgres + replay endpoint for “no reset on refresh”
+ * server.js — Unified AI Trading Arena
+ * Fix: Accept Railway env var names (aliases) so APIs show TRUE and features work.
  */
 
 import express from "express";
@@ -27,18 +21,51 @@ app.use(express.static("public"));
 const PORT = process.env.PORT || 3000;
 
 // -----------------------------
-// ENV
+// ENV (ALIASING TO MATCH RAILWAY)
 // -----------------------------
-const FINNHUB_KEY = process.env.FINNHUB_KEY || "";
-const TWELVEDATA_KEY = process.env.TWELVEDATA_KEY || "";
-const NEWSDATA_KEY = process.env.NEWSDATA_KEY || "";
-const NEWSAPI_KEY = process.env.NEWSAPI_KEY || "";
-const OPENAI_KEY = process.env.OPENAI_KEY || "";
+// Prices
+const FINNHUB_KEY = process.env.FINNHUB_KEY || process.env.FINNHUB_API_KEY || "";
+const TWELVEDATA_KEY = process.env.TWELVEDATA_KEY || process.env.TWELVEDATA_API_KEY || "";
 
-const MARKET_TZ = "America/New_York";
+// News
+// Primary: NEWS_API_KEY (your screenshot). Backup: NEWSAPI_BACKUP_KEY.
+// Also allow legacy names.
+const NEWS_PRIMARY_KEY =
+  process.env.NEWSDATA_KEY ||
+  process.env.NEWSAPI_KEY ||
+  process.env.NEWS_API_KEY ||
+  "";
+const NEWS_BACKUP_KEY =
+  process.env.NEWSAPI_BACKUP_KEY ||
+  process.env.NEWS_BACKUP_KEY ||
+  "";
 
+// OpenAI (handle typo variants too)
+const OPENAI_KEY =
+  process.env.OPENAI_KEY ||
+  process.env.OPENAI_API_KEY ||
+  process.env.OPENA1_API_KEY || // if you accidentally used "1" in Railway
+  "";
+
+// Market
+const MARKET_TZ = process.env.MARKET_TZ || "America/New_York";
+const MARKET_NEWS_ONLY_WHEN_CLOSED =
+  (process.env.MARKET_NEWS_ONLY_WHEN_CLOSED || "true").toLowerCase() === "true";
+
+// Runner
 const RUNNER_ENABLED = (process.env.RUNNER_ENABLED || "true").toLowerCase() === "true";
 const RUNNER_INTERVAL_SEC = Number(process.env.RUNNER_INTERVAL_SEC || 5);
+
+// Universe / symbols: prefer AUTO_SYMBOLS if set, else defaults.
+// AUTO_SYMBOLS expected as comma-separated tickers (e.g., "AAPL,MSFT,NVDA")
+function parseAutoSymbols() {
+  const raw = process.env.AUTO_SYMBOLS || "";
+  const arr = raw
+    .split(",")
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+  return arr.length ? arr : null;
+}
 
 // -----------------------------
 // DB
@@ -197,7 +224,7 @@ function sentimentScore(text) {
 }
 
 // -----------------------------
-// Market gate (simple)
+// Market gate
 // -----------------------------
 function getNowInTZ(tz) {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -226,14 +253,17 @@ function isMarketOpen() {
 }
 
 // -----------------------------
-// Price: Finnhub -> TwelveData -> Mock
+// Price providers
 // -----------------------------
 async function getStockPrice(symbol) {
   const s = symbol.toUpperCase().trim();
 
   if (FINNHUB_KEY) {
     try {
-      const r = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(s)}&token=${encodeURIComponent(FINNHUB_KEY)}`, { timeout: 15000 });
+      const r = await fetch(
+        `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(s)}&token=${encodeURIComponent(FINNHUB_KEY)}`,
+        { timeout: 15000 }
+      );
       const parsed = await safeJson(r);
       if (parsed.ok && parsed.json && Number.isFinite(parsed.json.c)) {
         return {
@@ -249,7 +279,10 @@ async function getStockPrice(symbol) {
 
   if (TWELVEDATA_KEY) {
     try {
-      const r = await fetch(`https://api.twelvedata.com/price?symbol=${encodeURIComponent(s)}&apikey=${encodeURIComponent(TWELVEDATA_KEY)}`, { timeout: 15000 });
+      const r = await fetch(
+        `https://api.twelvedata.com/price?symbol=${encodeURIComponent(s)}&apikey=${encodeURIComponent(TWELVEDATA_KEY)}`,
+        { timeout: 15000 }
+      );
       const parsed = await safeJson(r);
       if (parsed.ok && parsed.json?.price) {
         const price = Number(parsed.json.price);
@@ -262,59 +295,57 @@ async function getStockPrice(symbol) {
 }
 
 // -----------------------------
-// News: symbol-bound
+// News providers
+// We use NewsAPI-style "everything" for both primary and backup keys.
 // -----------------------------
+async function newsApiEverything(q, key, limit = 10) {
+  const r = await fetch(
+    `https://newsapi.org/v2/everything?q=${encodeURIComponent(q)}&language=en&pageSize=${limit}&sortBy=publishedAt`,
+    { timeout: 15000, headers: { "X-Api-Key": key } }
+  );
+  const parsed = await safeJson(r);
+  if (!parsed.ok || !Array.isArray(parsed.json?.articles)) return null;
+  return parsed.json.articles.map((a) => ({
+    title: a.title || "",
+    url: a.url || "",
+    source: a.source?.name || "newsapi",
+    publishedAt: a.publishedAt || "",
+    summary: a.description || "",
+  }));
+}
+
 async function getNews(symbol, limit = 8) {
   const s = symbol.toUpperCase().trim();
+  const q = s;
 
-  if (NEWSDATA_KEY) {
+  if (NEWS_PRIMARY_KEY) {
     try {
-      const r = await fetch(`https://newsdata.io/api/1/news?apikey=${encodeURIComponent(NEWSDATA_KEY)}&q=${encodeURIComponent(s)}&language=en`, { timeout: 15000 });
-      const parsed = await safeJson(r);
-      if (parsed.ok && Array.isArray(parsed.json?.results)) {
-        const items = parsed.json.results.slice(0, limit).map((a) => ({
-          title: a.title || "",
-          url: a.link || "",
-          source: a.source_id || "newsdata",
-          publishedAt: a.pubDate || "",
-          summary: a.description || "",
-        }));
-        return { provider: "newsdata", items };
-      }
+      const items = await newsApiEverything(q, NEWS_PRIMARY_KEY, limit);
+      if (items && items.length) return { provider: "newsapi-primary", items };
     } catch {}
   }
 
-  if (NEWSAPI_KEY) {
+  if (NEWS_BACKUP_KEY) {
     try {
-      const r = await fetch(`https://newsapi.org/v2/everything?q=${encodeURIComponent(s)}&language=en&pageSize=${limit}&sortBy=publishedAt`, {
-        timeout: 15000,
-        headers: { "X-Api-Key": NEWSAPI_KEY },
-      });
-      const parsed = await safeJson(r);
-      if (parsed.ok && Array.isArray(parsed.json?.articles)) {
-        const items = parsed.json.articles.slice(0, limit).map((a) => ({
-          title: a.title || "",
-          url: a.url || "",
-          source: a.source?.name || "newsapi",
-          publishedAt: a.publishedAt || "",
-          summary: a.description || "",
-        }));
-        return { provider: "newsapi", items };
-      }
+      const items = await newsApiEverything(q, NEWS_BACKUP_KEY, limit);
+      if (items && items.length) return { provider: "newsapi-backup", items };
     } catch {}
   }
 
   return {
-    provider: "mock",
+    provider: "fallback",
     items: [
-      { title: `${s} — no news provider configured`, url: "#", source: "mock", publishedAt: new Date().toISOString(), summary: "Set NEWSDATA_KEY or NEWSAPI_KEY for live symbol news." },
+      {
+        title: `${s} — no news provider configured`,
+        url: "#",
+        source: "fallback",
+        publishedAt: new Date().toISOString(),
+        summary: "Set NEWS_API_KEY (and optionally NEWSAPI_BACKUP_KEY) to enable live headlines.",
+      },
     ],
   };
 }
 
-// -----------------------------
-// News: general (NON stock-market) with strong fallback
-// -----------------------------
 const FALLBACK_GENERAL_NEWS = [
   {
     title: "City rolls out ‘green wave’ traffic lights to reduce congestion and emissions",
@@ -344,49 +375,25 @@ async function getGeneralNews(limit = 10) {
     "(traffic OR infrastructure OR regulation OR energy OR healthcare OR retail OR airline OR automotive OR semiconductors OR technology OR manufacturing) " +
     "-stock -stocks -shares -earnings -nasdaq -nyse -dow -s&p -sp500 -investor -ipo";
 
-  if (NEWSDATA_KEY) {
+  if (NEWS_PRIMARY_KEY) {
     try {
-      const r = await fetch(`https://newsdata.io/api/1/news?apikey=${encodeURIComponent(NEWSDATA_KEY)}&q=${encodeURIComponent(q)}&language=en`, { timeout: 15000 });
-      const parsed = await safeJson(r);
-      if (parsed.ok && Array.isArray(parsed.json?.results) && parsed.json.results.length) {
-        const items = parsed.json.results.slice(0, limit).map((a) => ({
-          title: a.title || "",
-          url: a.link || "",
-          source: a.source_id || "newsdata",
-          publishedAt: a.pubDate || "",
-          summary: a.description || "",
-        }));
-        return { provider: "newsdata", items };
-      }
+      const items = await newsApiEverything(q, NEWS_PRIMARY_KEY, limit);
+      if (items && items.length) return { provider: "newsapi-primary", items };
     } catch {}
   }
 
-  if (NEWSAPI_KEY) {
+  if (NEWS_BACKUP_KEY) {
     try {
-      const r = await fetch(`https://newsapi.org/v2/everything?q=${encodeURIComponent(q)}&language=en&pageSize=${limit}&sortBy=publishedAt`, {
-        timeout: 15000,
-        headers: { "X-Api-Key": NEWSAPI_KEY },
-      });
-      const parsed = await safeJson(r);
-      if (parsed.ok && Array.isArray(parsed.json?.articles) && parsed.json.articles.length) {
-        const items = parsed.json.articles.slice(0, limit).map((a) => ({
-          title: a.title || "",
-          url: a.url || "",
-          source: a.source?.name || "newsapi",
-          publishedAt: a.publishedAt || "",
-          summary: a.description || "",
-        }));
-        return { provider: "newsapi", items };
-      }
+      const items = await newsApiEverything(q, NEWS_BACKUP_KEY, limit);
+      if (items && items.length) return { provider: "newsapi-backup", items };
     } catch {}
   }
 
-  // Strong fallback so UI is never empty
   return { provider: "fallback", items: FALLBACK_GENERAL_NEWS.slice(0, Math.max(1, Math.min(limit, FALLBACK_GENERAL_NEWS.length))) };
 }
 
 // -----------------------------
-// Evidence-driven “Article -> impacted stocks”
+// Article -> impacted stocks + Evidence Drawer
 // -----------------------------
 const IMPACT_MAP = [
   {
@@ -522,7 +529,6 @@ Article summary: ${String(summary || "")}
     };
   }
 
-  // fallback heuristic always returns evidence
   return { items: heuristic.items, evidence: heuristic.evidence };
 }
 
@@ -568,10 +574,11 @@ const GOAL_CASH = 150000;
 async function ensurePortfolios() {
   if (!hasDb) return;
   for (const b of BOTS) {
-    await dbQuery(
-      `INSERT INTO portfolios(bot, cash, goal) VALUES ($1,$2,$3) ON CONFLICT (bot) DO NOTHING`,
-      [b.bot, START_CASH, GOAL_CASH]
-    );
+    await dbQuery(`INSERT INTO portfolios(bot, cash, goal) VALUES ($1,$2,$3) ON CONFLICT (bot) DO NOTHING`, [
+      b.bot,
+      START_CASH,
+      GOAL_CASH,
+    ]);
   }
 }
 
@@ -641,7 +648,6 @@ function decideBase({ bot, avgSent, changePercent }) {
     if (Math.abs(changePercent) > 1.2) return { signal: changePercent > 0 ? "SELL" : "BUY", confidence: 66, why: "Volatility mean-reversion signal" };
     return { signal: "HOLD", confidence: 54, why: "Volatility insufficient for day edge" };
   }
-  // news_only
   if (avgSent > 0.12) return { signal: "BUY", confidence: 65, why: "Headline tone implies near-term upside" };
   if (avgSent < -0.12) return { signal: "SELL", confidence: 65, why: "Headline tone implies near-term downside" };
   return { signal: "HOLD", confidence: 55, why: "Headline sentiment is mixed/neutral" };
@@ -721,7 +727,7 @@ async function evaluateDueLearning() {
 }
 
 // -----------------------------
-// Runner universe + state
+// Universe + runner state
 // -----------------------------
 const DEFAULT_UNIVERSE = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "JPM", "XOM", "UNH"];
 
@@ -740,6 +746,9 @@ async function setRunnerState({ symbol_index, last_symbol }) {
 }
 
 async function getUniverseSymbols() {
+  const auto = parseAutoSymbols();
+  if (auto) return auto;
+
   const u = hasDb ? await getSetting("universe") : { mode: "default", custom: [] };
   if (u?.mode === "custom" && Array.isArray(u.custom) && u.custom.length) {
     return u.custom.map((s) => String(s).toUpperCase().trim()).filter(Boolean);
@@ -748,7 +757,7 @@ async function getUniverseSymbols() {
 }
 
 // -----------------------------
-// API ROUTES (RESTORED)
+// API ROUTES
 // -----------------------------
 app.get("/api/health", async (req, res) => {
   const m = isMarketOpen();
@@ -758,13 +767,14 @@ app.get("/api/health", async (req, res) => {
     apis: {
       finnhub: !!FINNHUB_KEY,
       twelvedata: !!TWELVEDATA_KEY,
-      newsData: !!NEWSDATA_KEY,
-      newsApi: !!NEWSAPI_KEY,
+      newsPrimary: !!NEWS_PRIMARY_KEY,
+      newsBackup: !!NEWS_BACKUP_KEY,
       openai: !!OPENAI_KEY,
       postgres: !!hasDb,
     },
     market: { open: m.open, reason: m.reason, tz: MARKET_TZ },
-    version: "arena-unified-runner-news-impact-evidence",
+    mode: { marketNewsOnlyWhenClosed: MARKET_NEWS_ONLY_WHEN_CLOSED },
+    version: "arena-unified-env-aliases",
   });
 });
 
@@ -779,38 +789,37 @@ app.get("/api/runner/status", async (req, res) => {
       enabled: RUNNER_ENABLED,
       intervalSec: RUNNER_INTERVAL_SEC,
       market: m,
-      universe: hasDb ? (await getSetting("universe")) : { mode: "default", custom: [] },
+      marketNewsOnlyWhenClosed: MARKET_NEWS_ONLY_WHEN_CLOSED,
       state: { lastSymbol: st.last_symbol || null, symbolIndex: Number(st.symbol_index || 0) },
       nextSymbol,
+      universe: symbols,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Events replay for “no reset on refresh”
 app.get("/api/events/recent", async (req, res) => {
   try {
     if (!hasDb) return res.json({ items: [] });
     const limit = Math.min(Math.max(Number(req.query.limit || 120), 10), 500);
     const afterId = Number(req.query.afterId || 0);
 
-    const r = await dbQuery(
-      `SELECT id, ts, type, payload FROM events WHERE id > $2 ORDER BY id DESC LIMIT $1`,
-      [limit, afterId]
-    );
+    const r = await dbQuery(`SELECT id, ts, type, payload FROM events WHERE id > $2 ORDER BY id DESC LIMIT $1`, [
+      limit,
+      afterId,
+    ]);
 
-    const items = r.rows
-      .map((x) => ({ id: Number(x.id), ts: x.ts, type: x.type, payload: x.payload || {} }))
-      .reverse();
-
-    res.json({ items });
+    res.json({
+      items: r.rows
+        .map((x) => ({ id: Number(x.id), ts: x.ts, type: x.type, payload: x.payload || {} }))
+        .reverse(),
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// News
 app.get("/api/news/general", async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 30);
@@ -820,17 +829,6 @@ app.get("/api/news/general", async (req, res) => {
   }
 });
 
-app.get("/api/news/:symbol", async (req, res) => {
-  try {
-    const v = isValidTicker(req.params.symbol);
-    if (!v.ok) return res.status(400).json({ error: v.reason });
-    res.json(await getNews(v.symbol, 8));
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Article -> impacted stocks + evidence (Evidence Drawer)
 app.post("/api/news/impact", async (req, res) => {
   try {
     const { title, summary } = req.body || {};
@@ -840,7 +838,6 @@ app.post("/api/news/impact", async (req, res) => {
   }
 });
 
-// Portfolios / Trades (War Room needs these)
 app.get("/api/portfolios", async (req, res) => {
   try {
     if (!hasDb) return res.json({ items: [] });
@@ -882,7 +879,6 @@ app.get("/api/trades/:bot", async (req, res) => {
   }
 });
 
-// Learning impact
 app.get("/api/learning/impact", async (req, res) => {
   try {
     if (!hasDb) return res.json({ days: 14, byStrategy: {} });
@@ -910,13 +906,13 @@ app.get("/api/learning/impact", async (req, res) => {
       if (!byStrategy[strategy]) byStrategy[strategy] = [];
       byStrategy[strategy].push({ day, accuracy: acc, evaluated });
     }
+
     res.json({ days, byStrategy });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Bots fight endpoint (Runner calls this)
 app.get("/api/bots/:symbol", async (req, res) => {
   try {
     const v = isValidTicker(req.params.symbol);
@@ -933,7 +929,6 @@ app.get("/api/bots/:symbol", async (req, res) => {
     const newsItems = (newsPack.items || []).map((x) => ({ ...x, sentiment: sentimentScore(`${x.title} ${x.summary}`) }));
     const avgSent = newsItems.length ? newsItems.reduce((a, b) => a + (b.sentiment || 0), 0) / newsItems.length : 0;
 
-    // IMPORTANT: include price/changePercent so UI doesn’t show blanks
     const features = { price: Number(q.price), avgSent, changePercent: Number(q.changePercent || 0) };
 
     const botsOut = [];
@@ -984,8 +979,29 @@ app.get("/api/bots/:symbol", async (req, res) => {
 });
 
 // -----------------------------
-// Runner loop (RESTORED)
+// WS + Runner loop
 // -----------------------------
+async function emitEvent(type, payload) {
+  let eventId = null;
+  if (hasDb) {
+    const r = await dbQuery(`INSERT INTO events(type, payload) VALUES ($1, $2::jsonb) RETURNING id`, [
+      type,
+      JSON.stringify(payload || {}),
+    ]);
+    eventId = r.rows[0]?.id || null;
+  }
+  wsBroadcast({ id: eventId, type, payload, ts: new Date().toISOString() });
+}
+
+function wsBroadcast(obj) {
+  const msg = JSON.stringify(obj);
+  for (const ws of wsClients) {
+    try {
+      ws.send(msg);
+    } catch {}
+  }
+}
+
 let runnerTimer = null;
 
 async function runnerTick() {
@@ -1000,7 +1016,6 @@ async function runnerTick() {
   const market = isMarketOpen();
   await emitEvent("carousel_tick", { symbol: sym, market });
 
-  // Drive a fight
   try {
     const r = await fetch(`http://127.0.0.1:${PORT}/api/bots/${encodeURIComponent(sym)}`);
     const parsed = await safeJson(r);
@@ -1016,7 +1031,6 @@ async function runnerTick() {
     }
   } catch {}
 
-  // Evaluate learning and broadcast
   const ev = await evaluateDueLearning();
   if (ev.evaluated > 0) await emitEvent("learning_evaluated", { evaluated: ev.evaluated });
 }
@@ -1028,7 +1042,7 @@ function startRunner() {
 }
 
 // -----------------------------
-// Boot server + WS
+// Boot
 // -----------------------------
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
@@ -1041,7 +1055,7 @@ wss.on("connection", (ws) => {
 (async function boot() {
   await initDb().catch(() => {});
   await ensurePortfolios().catch(() => {});
-  await emitEvent("server_boot", { version: "arena-unified-runner-news-impact-evidence" }).catch(() => {});
+  await emitEvent("server_boot", { version: "arena-unified-env-aliases" }).catch(() => {});
   startRunner();
 })();
 
