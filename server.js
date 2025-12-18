@@ -412,11 +412,11 @@ async function logLearningSample({ bot, strategy, symbol, signal, horizon, price
     `
     INSERT INTO learning_samples(bot, strategy, symbol, signal, horizon, price_at_signal, features, rationale, confidence, eval_after_sec)
     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10)
-    RETURNING id
+    RETURNING id, created_at
   `,
     [bot, strategy, symbol, signal, horizon, priceAtSignal, JSON.stringify(features || {}), rationale || "", confidence || 50, evalAfterSec]
   );
-  return r.rows[0]?.id ?? null;
+  return r.rows[0] || null;
 }
 
 // Online update weights when sample evaluated.
@@ -490,6 +490,119 @@ async function evaluateDueLearning() {
   }
 
   return { evaluated };
+}
+
+// -----------------------------
+// Learning verdict utilities (Phase 4)
+// No schema changes. Best-effort mapping:
+// - For a given trade: find nearest learning_sample in time for same bot+symbol+signal
+// - If sample evaluated => WIN/LOSS else PENDING
+// -----------------------------
+function verdictFromSampleRow(row) {
+  if (!row) return "PENDING";
+  if (!row.evaluated_at) return "PENDING";
+  return row.correct === true ? "WIN" : "LOSS";
+}
+
+async function attachLearningVerdictsToTrades(trades) {
+  if (!hasDb) return trades || [];
+  const items = Array.isArray(trades) ? trades : [];
+  if (!items.length) return items;
+
+  // Identify a time window around these trades
+  const tsList = items
+    .map(t => new Date(t.ts).getTime())
+    .filter(x => Number.isFinite(x));
+  if (!tsList.length) return items;
+
+  const minTs = Math.min(...tsList);
+  const maxTs = Math.max(...tsList);
+
+  // Pull samples in a buffered range (10 minutes)
+  const from = new Date(minTs - 10 * 60 * 1000).toISOString();
+  const to   = new Date(maxTs + 10 * 60 * 1000).toISOString();
+
+  // We need only relevant samples:
+  // strategy (bot) + symbol + signal + created_at + evaluated_at + correct
+  // We'll fetch per bot in one query with symbol filter.
+  const bots = Array.from(new Set(items.map(t => String(t.bot || "")))).filter(Boolean);
+  const symbols = Array.from(new Set(items.map(t => String(t.symbol || "")))).filter(Boolean);
+
+  if (!bots.length || !symbols.length) {
+    return items.map(t => ({ ...t, learningVerdict: "PENDING" }));
+  }
+
+  // Note: using ANY($n) arrays to keep it safe.
+  const sampleRes = await dbQuery(
+    `
+    SELECT strategy, symbol, signal, created_at, evaluated_at, correct
+    FROM learning_samples
+    WHERE created_at >= $1
+      AND created_at <= $2
+      AND strategy = ANY($3)
+      AND symbol   = ANY($4)
+  `,
+    [from, to, bots, symbols]
+  );
+
+  const samples = sampleRes.rows || [];
+
+  // Index samples by (strategy|symbol|signal) and sort by created_at for nearest match
+  const key = (strategy, symbol, signal) => `${strategy}||${symbol}||${signal}`;
+  const map = new Map();
+  for (const s of samples) {
+    const k = key(s.strategy, s.symbol, s.signal);
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(s);
+  }
+  for (const [k, arr] of map.entries()) {
+    arr.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    map.set(k, arr);
+  }
+
+  function nearestSample(arr, targetMs) {
+    if (!arr || !arr.length) return null;
+    // binary search for closest created_at
+    let lo = 0, hi = arr.length - 1;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const midMs = new Date(arr[mid].created_at).getTime();
+      if (midMs < targetMs) lo = mid + 1;
+      else hi = mid;
+    }
+    // candidates: lo and lo-1
+    const cand1 = arr[lo] || null;
+    const cand0 = lo > 0 ? arr[lo - 1] : null;
+
+    if (!cand0) return cand1;
+    if (!cand1) return cand0;
+
+    const d0 = Math.abs(new Date(cand0.created_at).getTime() - targetMs);
+    const d1 = Math.abs(new Date(cand1.created_at).getTime() - targetMs);
+    return d1 < d0 ? cand1 : cand0;
+  }
+
+  // Attach verdict per trade
+  const out = items.map(t => {
+    const bot = String(t.bot || "");
+    const sym = String(t.symbol || "");
+    const sig = String(t.side || "");
+    const tms = new Date(t.ts).getTime();
+
+    const arr = map.get(key(bot, sym, sig));
+    const near = nearestSample(arr, tms);
+
+    // Only accept if within 2 minutes (tight match to the fight tick)
+    let verdict = "PENDING";
+    if (near) {
+      const deltaMs = Math.abs(new Date(near.created_at).getTime() - tms);
+      if (deltaMs <= 2 * 60 * 1000) verdict = verdictFromSampleRow(near);
+    }
+
+    return { ...t, learningVerdict: verdict };
+  });
+
+  return out;
 }
 
 // -----------------------------
@@ -601,12 +714,12 @@ app.get("/api/health", async (req, res) => {
       postgres: !!hasDb,
     },
     market: { open: m.open, reason: m.reason, tz: MARKET_TZ },
-    version: "arena-v3-learning-universe-runner",
+    version: "arena-v4-ui-warroom-drawer-verdicts",
   });
 });
 
 app.get("/api/version", (req, res) => {
-  res.json({ version: "arena-v3-learning-universe-runner", timestamp: new Date().toISOString() });
+  res.json({ version: "arena-v4-ui-warroom-drawer-verdicts", timestamp: new Date().toISOString() });
 });
 
 // Learning speed setting
@@ -764,7 +877,7 @@ app.get("/api/market-overview", async (req, res) => {
   }
 });
 
-// Trades recent
+// Trades recent (with learningVerdict)
 app.get("/api/trades/recent", async (req, res) => {
   try {
     if (!hasDb) return res.json({ items: [] });
@@ -776,13 +889,14 @@ app.get("/api/trades/recent", async (req, res) => {
        LIMIT $1`,
       [limit]
     );
-    res.json({ items: r.rows });
+    const items = await attachLearningVerdictsToTrades(r.rows || []);
+    res.json({ items });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Trades by bot (full history)
+// Trades by bot (full history, with learningVerdict)
 app.get("/api/trades/bot/:bot", async (req, res) => {
   try {
     if (!hasDb) return res.json({ items: [] });
@@ -797,7 +911,9 @@ app.get("/api/trades/bot/:bot", async (req, res) => {
        LIMIT $2`,
       [bot, limit]
     );
-    res.json({ items: r.rows });
+
+    const items = await attachLearningVerdictsToTrades(r.rows || []);
+    res.json({ items });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -848,6 +964,50 @@ app.get("/api/learning/impact", async (req, res) => {
     }
 
     res.json({ days, byStrategy });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// NEW: Learning verdict summary for a bot (Phase 4)
+// Used by War Room drawer to compute win rate KPI.
+// NOTE: This does not require schema changes.
+app.get("/api/learning/verdicts", async (req, res) => {
+  try {
+    if (!hasDb) return res.json({ bot: null, verdictByTradeId: {}, stats: { win: 0, loss: 0, pending: 0 } });
+
+    const bot = String(req.query.bot || "").trim();
+    if (!bot) return res.status(400).json({ error: "Missing bot" });
+
+    // Recent window — last N days
+    const days = Math.min(Math.max(Number(req.query.days || 14), 1), 90);
+
+    const r = await dbQuery(
+      `
+      SELECT evaluated_at, correct
+      FROM learning_samples
+      WHERE strategy = $1
+        AND created_at >= NOW() - ($2 || ' days')::interval
+      ORDER BY created_at DESC
+      LIMIT 2000
+    `,
+      [bot, days]
+    );
+
+    let win = 0, loss = 0, pending = 0;
+    for (const row of (r.rows || [])) {
+      if (!row.evaluated_at) pending++;
+      else if (row.correct === true) win++;
+      else loss++;
+    }
+
+    // We keep verdictByTradeId empty by design (no schema link).
+    // Per-trade verdicts are served on /api/trades/* via best-effort matching.
+    res.json({
+      bot,
+      verdictByTradeId: {},
+      stats: { win, loss, pending }
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -922,12 +1082,14 @@ app.get("/api/bots/:symbol", async (req, res) => {
         ? (Number(setting.evalAfterSec) > 0 ? Number(setting.evalAfterSec) : 30)
         : (Number(setting.evalAfterSec) > 0 ? Number(setting.evalAfterSec) : 3600);
 
+    const sampleIds = [];
+
     if (hasDb) {
       try {
         await ensurePortfolios();
 
         for (const b of bots) {
-          const id = await logLearningSample({
+          const row = await logLearningSample({
             bot: b.strategy,
             strategy: b.strategy,
             symbol,
@@ -939,7 +1101,10 @@ app.get("/api/bots/:symbol", async (req, res) => {
             confidence: b.confidence,
             evalAfterSec,
           });
-          if (id) logged++;
+          if (row?.id) {
+            logged++;
+            sampleIds.push({ strategy: b.strategy, id: row.id });
+          }
         }
       } catch (e) {
         logError = e.message;
@@ -1034,6 +1199,7 @@ app.get("/api/bots/:symbol", async (req, res) => {
           bots,
           winner: winner.strategy,
           tradeId: executedTrade?.id ?? null,
+          sampleIds, // informational only
         });
       } catch {
         // keep endpoint alive
