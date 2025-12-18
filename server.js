@@ -541,16 +541,28 @@ Article summary: ${String(summary || "")}
 }
 
 // -----------------------------
-// WebSocket
+// WebSocket (ESM-safe)
 // -----------------------------
-const server = httpCreateServer(app);
+import http from "http";
+
+const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 const wsClients = new Set();
+
 wss.on("connection", (ws) => {
   wsClients.add(ws);
   ws.on("close", () => wsClients.delete(ws));
 });
+
+function wsBroadcast(obj) {
+  const msg = JSON.stringify(obj);
+  for (const ws of wsClients) {
+    try {
+      ws.send(msg);
+    } catch {}
+  }
+}
 
 function wsBroadcast(obj) {
   const msg = JSON.stringify(obj);
