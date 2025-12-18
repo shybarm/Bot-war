@@ -1,6 +1,9 @@
 const $ = (id) => document.getElementById(id);
 
-function setWsStatus(t) { $("wsStatus").textContent = t; }
+function setWsStatus(t) {
+  const el = $("wsStatus");
+  if (el) el.textContent = t;
+}
 
 function fmtTime(ts) {
   try { return new Date(ts).toLocaleTimeString(); } catch { return ""; }
@@ -10,23 +13,43 @@ function pushEventLine(line, ts) {
   const box = $("eventStream");
   if (!box) return;
 
-  // remove placeholder
   if (box.querySelector(".placeholder")) box.innerHTML = "";
 
   const row = document.createElement("div");
-  row.className = "chip rounded-xl p-3";
-  row.innerHTML = `
-    <div class="text-xs muted">${fmtTime(ts)} • ${line}</div>
-  `;
-  box.appendChild(row);
+  row.className = "text-xs text-slate-200/80";
+  row.textContent = `${fmtTime(ts)}  ${line}`;
 
-  // keep scroll pinned to bottom
-  box.scrollTop = box.scrollHeight;
+  box.prepend(row);
+
+  // cap
+  const nodes = box.querySelectorAll("div");
+  if (nodes.length > 220) nodes[nodes.length - 1].remove();
+}
+
+function formatEvent(msg) {
+  const type = msg.type || "event";
+  const p = msg.payload || {};
+  if (type === "carousel_tick") return `Carousel → ${p.symbol || "—"}`;
+  if (type === "runner_state") return `Runner state updated (idx=${p.state?.idx ?? "—"})`;
+  if (type === "server_boot") return `Server booted`;
+  return `${type}`;
+}
+
+async function getJSON(url, opts) {
+  const r = await fetch(url, opts);
+  const txt = await r.text();
+  try { return JSON.parse(txt); } catch { return {}; }
 }
 
 function renderBankroll(items) {
   const box = $("bankrollGrid");
   if (!box) return;
+
+  if (!items || !items.length) {
+    box.innerHTML = `<div class="chip rounded-2xl p-4 muted text-sm">No portfolios yet.</div>`;
+    return;
+  }
+
   box.innerHTML = (items || []).map((p) => {
     const cash = Number(p.cash || 0);
     const goal = Number(p.goal || 150000);
@@ -37,99 +60,92 @@ function renderBankroll(items) {
           <div class="font-semibold">${p.bot}</div>
           <div class="text-xs muted">${cash.toFixed(0)} / ${goal.toFixed(0)}</div>
         </div>
-        <div class="mt-2 text-xs muted">Progress</div>
-        <div class="mt-2 h-2 w-full rounded-full bg-white/10 overflow-hidden">
-          <div class="h-2 rounded-full bg-white/30" style="width:${Math.min(100, Math.max(0, pct)).toFixed(1)}%"></div>
+        <div class="mt-2 h-2 rounded-full bg-white/10 overflow-hidden">
+          <div class="h-2 bg-white/30" style="width:${Math.min(100, Math.max(0, pct)).toFixed(1)}%"></div>
         </div>
-        <div class="mt-2 text-xs muted">${pct.toFixed(1)}%</div>
+        <div class="mt-2 text-xs muted">${pct.toFixed(1)}% to goal</div>
       </div>
     `;
   }).join("");
 }
 
 function renderTrades(items) {
-  const tb = $("tradeStreamBody");
-  if (!tb) return;
+  const body = $("tradeBody");
+  if (!body) return;
+
   if (!items || !items.length) {
-    tb.innerHTML = `<tr class="muted"><td class="py-3" colspan="7">—</td></tr>`;
+    body.innerHTML = `<tr><td class="muted text-sm py-3" colspan="7">No trades yet.</td></tr>`;
     return;
   }
-  tb.innerHTML = items.map((t) => `
-    <tr class="border-t border-white/10">
-      <td class="py-2 pr-3 text-xs muted">${fmtTime(t.ts)}</td>
-      <td class="py-2 pr-3">${t.bot}</td>
-      <td class="py-2 pr-3">${t.side}</td>
-      <td class="py-2 pr-3">${t.symbol}</td>
-      <td class="py-2 pr-3">${Number(t.qty || 0).toFixed(0)}</td>
-      <td class="py-2 pr-3">$${Number(t.price || 0).toFixed(2)}</td>
-      <td class="py-2 text-xs muted">${t.rationale || ""}</td>
+
+  body.innerHTML = items.map((t) => `
+    <tr class="border-t border-white/5">
+      <td class="py-2 text-xs muted">${fmtTime(t.ts)}</td>
+      <td class="py-2 text-xs">${t.bot || "—"}</td>
+      <td class="py-2 text-xs">${t.side || "—"}</td>
+      <td class="py-2 text-xs">${t.symbol || "—"}</td>
+      <td class="py-2 text-xs muted">${Number(t.qty || 0)}</td>
+      <td class="py-2 text-xs muted">${Number(t.price || 0).toFixed(2)}</td>
+      <td class="py-2 text-xs muted">${(t.rationale || "").slice(0, 90)}</td>
     </tr>
   `).join("");
 }
 
-async function getJSON(url, opts) {
-  const r = await fetch(url, opts);
-  const txt = await r.text();
-  return JSON.parse(txt);
-}
-
 async function refreshWarRoom() {
-  const p = await getJSON("/api/portfolios");
-  renderBankroll(p.items || []);
+  // portfolios
+  try {
+    const p = await getJSON("/api/portfolios");
+    renderBankroll(p.items || []);
+  } catch {}
 
-  const t = await getJSON("/api/trades/recent?limit=25");
-  renderTrades(t.items || []);
+  // trades
+  try {
+    const t = await getJSON("/api/trades/recent?limit=25");
+    renderTrades(t.items || []);
+  } catch {}
 
-  const r = await getJSON("/api/runner/status");
-  $("runnerInfo").innerHTML = `
-    <div><b>Enabled:</b> ${r.enabled ? "YES" : "NO"}</div>
-    <div><b>Interval:</b> ${r.intervalSec}s</div>
-    <div><b>Market:</b> ${r.market.open ? "OPEN" : "CLOSED"} (${r.market.reason})</div>
-    <div><b>News-only when closed:</b> ${r.newsOnlyWhenClosed ? "YES" : "NO"}</div>
-    <div><b>Universe:</b> ${r.universe.mode}${r.universe.mode==="custom" ? ` (${(r.universe.custom||[]).length})` : ""}</div>
-    <div><b>Last symbol:</b> ${r.state.lastSymbol || "—"}</div>
-    <div><b>Next symbol:</b> ${r.nextSymbol || "—"}</div>
-  `;
+  // runner status (IMPORTANT: do not assume optional fields exist)
+  try {
+    const r = await getJSON("/api/runner/status");
+
+    const runnerBox = $("runnerInfo");
+    if (runnerBox) {
+      const market = r.market || {};
+      const universe = r.universe || {};
+      runnerBox.innerHTML = `
+        <div><b>Enabled:</b> ${r.enabled ? "YES" : "NO"}</div>
+        <div><b>Interval:</b> ${r.intervalSec ?? "—"}s</div>
+        <div><b>Market:</b> ${market.open ? "OPEN" : "CLOSED"} (${market.reason || "—"})</div>
+        <div><b>News-only when closed:</b> ${r.newsOnlyWhenClosed ? "YES" : "NO"}</div>
+        <div><b>Universe:</b> ${universe.mode || "—"}${universe.mode==="custom" ? ` (${(universe.custom||[]).length})` : ""}</div>
+        <div><b>Last symbol:</b> ${r.state?.lastSymbol || "—"}</div>
+        <div><b>Next symbol:</b> ${r.nextSymbol || "—"}</div>
+      `;
+    }
+
+    if ($("carouselSymbol")) $("carouselSymbol").textContent = r.state?.lastSymbol || "—";
+  } catch {}
 }
 
-function formatEvent(msg) {
-  if (msg.type === "carousel_tick") {
-    const m = msg.payload?.market;
-    return `♻ Carousel: ${msg.payload?.symbol} • Market: ${m?.open ? "OPEN" : "CLOSED"} (${m?.reason || ""})`;
-  }
-  if (msg.type === "bot_fight") {
-    const sym = msg.payload?.symbol;
-    const winner = msg.payload?.winner;
-    const allowed = msg.payload?.tradesAllowed;
-    return `⚔️ Fight: ${sym} • winner=${winner} • trades=${allowed ? "YES" : "NO"}`;
-  }
-  if (msg.type === "learning_evaluated") {
-    return `🧠 Learning evaluated: ${msg.payload?.evaluated || 0} samples`;
-  }
-  return `${msg.type}`;
-}
-
-// Key fix: on refresh, replay DB events so stream continues (no “starting over”)
-async function hydrateEventsFromDb() {
+async function backfillEvents() {
   const box = $("eventStream");
-  box.innerHTML = `<div class="muted placeholder">Loading events…</div>`;
+  if (!box) return;
 
-  // local cursor so subsequent refreshes continue “where you left off”
   const lastSeen = Number(localStorage.getItem("warroom_last_event_id") || 0);
 
-  const r = await getJSON(`/api/events/recent?limit=160&afterId=${lastSeen}`);
-  const items = r.items || [];
+  try {
+    const r = await getJSON(`/api/events/recent?limit=160&afterId=${lastSeen}`);
+    const items = r.items || [];
 
-  if (!items.length) {
-    box.innerHTML = `<div class="muted placeholder">Waiting for events…</div>`;
-    return;
-  }
+    if (!items.length) return;
 
-  box.innerHTML = "";
-  for (const e of items) {
-    pushEventLine(formatEvent(e), e.ts);
-    localStorage.setItem("warroom_last_event_id", String(e.id));
-  }
+    for (const msg of items) {
+      if (msg.id) localStorage.setItem("warroom_last_event_id", String(msg.id));
+      $("lastEvent").textContent = `${msg.type} • ${fmtTime(msg.ts)}`;
+      if (msg.type === "carousel_tick") $("carouselSymbol").textContent = msg.payload?.symbol || "—";
+      pushEventLine(formatEvent(msg), msg.ts);
+    }
+  } catch {}
 }
 
 function connectWS() {
@@ -143,27 +159,33 @@ function connectWS() {
   ws.onmessage = async (ev) => {
     try {
       const msg = JSON.parse(ev.data);
-      $("lastEvent").textContent = `${msg.type} • ${new Date(msg.ts).toLocaleTimeString()}`;
+      $("lastEvent").textContent = `${msg.type} • ${fmtTime(msg.ts)}`;
 
       if (msg.type === "carousel_tick") {
         $("carouselSymbol").textContent = msg.payload?.symbol || "—";
       }
 
-      // persist cursor if server provides id
       if (msg.id) localStorage.setItem("warroom_last_event_id", String(msg.id));
-
       pushEventLine(formatEvent(msg), msg.ts);
 
-      if (msg.type === "bot_fight") await refreshWarRoom();
+      // if runner ticks, refresh panels
+      if (msg.type === "carousel_tick" || msg.type === "bot_fight") {
+        await refreshWarRoom();
+      }
     } catch {}
   };
 
   return ws;
 }
 
+// boot
 (async function init() {
+  setWsStatus("WS: connecting…");
   await refreshWarRoom();
-  await hydrateEventsFromDb();
+  await backfillEvents();
   connectWS();
-  setInterval(() => refreshWarRoom().catch(() => {}), 15000);
+
+  // keep UI fresh even if WS is down
+  setInterval(() => refreshWarRoom().catch(() => {}), 12000);
+  setInterval(() => backfillEvents().catch(() => {}), 6000);
 })();
