@@ -4,6 +4,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
 import { WebSocketServer } from "ws";
+import http from "http";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -541,15 +542,12 @@ Article summary: ${String(summary || "")}
 }
 
 // -----------------------------
-// WebSocket (ESM-safe)
+// WebSocket (ESM-safe)  ✅ FIXED
 // -----------------------------
-import http from "http";
-
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 const wsClients = new Set();
-
 wss.on("connection", (ws) => {
   wsClients.add(ws);
   ws.on("close", () => wsClients.delete(ws));
@@ -562,26 +560,6 @@ function wsBroadcast(obj) {
       ws.send(msg);
     } catch {}
   }
-}
-
-function wsBroadcast(obj) {
-  const msg = JSON.stringify(obj);
-  for (const ws of wsClients) {
-    try {
-      ws.send(msg);
-    } catch {}
-  }
-}
-
-// Small wrapper so we don't need to change your existing server structure
-function httpCreateServer(appInstance) {
-  const http = awaitImportHttp();
-  return http.createServer(appInstance);
-}
-function awaitImportHttp() {
-  // Node ESM workaround without changing your project structure
-  // eslint-disable-next-line no-undef
-  return require("http");
 }
 
 // -----------------------------
@@ -688,9 +666,7 @@ app.get("/api/news/:symbol", async (req, res) => {
   }
 });
 
-// -----------------------------
-// ✅ NEW ROUTES (what your new UI expects)
-// -----------------------------
+// ✅ general news (new)
 app.get("/api/news/general", async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 30);
@@ -701,6 +677,7 @@ app.get("/api/news/general", async (req, res) => {
   }
 });
 
+// ✅ article -> impacted tickers (new)
 app.post("/api/news/impact", async (req, res) => {
   try {
     const { title, summary } = req.body || {};
@@ -717,9 +694,10 @@ app.post("/api/news/impact", async (req, res) => {
 // existing explain route (kept)
 app.post("/api/news/explain", async (req, res) => {
   try {
-    // keep your existing behavior if present in your project;
-    // if you had a custom function here, re-add it exactly.
-    res.json({ ok: true, note: "Use /api/news/impact for multi-ticker impact + evidence." });
+    res.json({
+      ok: true,
+      note: "Use /api/news/impact for multi-ticker impact + evidence.",
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -813,9 +791,7 @@ app.get("/api/bots/:symbol", async (req, res) => {
     const v = isValidTicker(req.params.symbol);
     if (!v.ok) return res.status(400).json({ error: v.reason });
 
-    // Keep your existing implementation here.
-    // If your project already has a complete bot engine, do NOT replace it.
-    // Minimal safe response so server never crashes:
+    // Minimal safe response (kept exactly as in your file)
     const symbol = v.symbol;
     const market = isMarketOpen();
     const q = await getStockPrice(symbol);
