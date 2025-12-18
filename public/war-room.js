@@ -15,7 +15,7 @@ async function getJSON(url, opts) {
   const t = await r.text();
   let j;
   try { j = JSON.parse(t); } catch { j = { raw: t }; }
-  if (!r.ok) throw new Error(j.error || t || "Request failed");
+  if (!r.ok) throw new Error(j.error || j.errorDetail || t || "Request failed");
   return j;
 }
 
@@ -25,15 +25,13 @@ function bankrollCardRow(p) {
   const pct = goal ? Math.max(0, Math.min(100, (cash / goal) * 100)) : 0;
 
   return `
-    <div class="glass rounded-2xl p-3 cursor-pointer hover:opacity-90" data-bot="${p.bot}">
-      <div class="flex items-center justify-between">
-        <div class="font-extrabold">${p.bot}</div>
-        <div class="text-xs muted">$${cash.toFixed(0)}</div>
+    <div class="bankCard" data-bot="${p.bot}">
+      <div class="row">
+        <div style="font-weight:900">${p.bot}</div>
+        <div class="muted">$${cash.toFixed(0)}</div>
       </div>
-      <div class="mt-2 h-2 rounded-full bg-white/10 overflow-hidden">
-        <div class="h-full bg-emerald-300/80" style="width:${pct.toFixed(1)}%"></div>
-      </div>
-      <div class="mt-2 text-xs muted">${pct.toFixed(1)}% to goal</div>
+      <div class="bar"><div style="width:${pct.toFixed(1)}%"></div></div>
+      <div class="muted" style="margin-top:8px;font-size:12px;">${pct.toFixed(1)}% to goal</div>
     </div>
   `;
 }
@@ -41,7 +39,7 @@ function bankrollCardRow(p) {
 function renderBankroll(items) {
   const box = $("bankrollGrid");
   if (!items || !items.length) {
-    box.innerHTML = `<div class="muted text-sm">No portfolios yet (runner will create them).</div>`;
+    box.innerHTML = `<div class="muted">No portfolios yet (runner will create them).</div>`;
     return;
   }
   box.innerHTML = items.map(bankrollCardRow).join("");
@@ -53,18 +51,18 @@ function renderBankroll(items) {
 function renderTrades(items) {
   const tb = $("tradeStreamBody");
   if (!items || !items.length) {
-    tb.innerHTML = `<tr><td class="p-3 muted" colspan="7">—</td></tr>`;
+    tb.innerHTML = `<tr><td class="muted" colspan="7">No trades yet.</td></tr>`;
     return;
   }
   tb.innerHTML = items.map((t) => `
-    <tr class="border-t border-white/10">
-      <td class="p-3 text-xs muted">${fmtTime(t.ts)}</td>
-      <td class="p-3">${t.bot}</td>
-      <td class="p-3">${t.side}</td>
-      <td class="p-3">${t.symbol}</td>
-      <td class="p-3">${Number(t.qty || 0).toFixed(0)}</td>
-      <td class="p-3">$${Number(t.price || 0).toFixed(2)}</td>
-      <td class="p-3 text-xs muted" title="${(t.rationale || "").replaceAll('"','&quot;')}">${(t.rationale || "").slice(0, 120)}</td>
+    <tr>
+      <td class="muted">${fmtTime(t.ts)}</td>
+      <td>${t.bot}</td>
+      <td>${t.side}</td>
+      <td>${t.symbol}</td>
+      <td>${Number(t.qty || 0).toFixed(0)}</td>
+      <td>$${Number(t.price || 0).toFixed(2)}</td>
+      <td class="muted" title="${String(t.rationale || "").replaceAll('"','&quot;')}">${String(t.rationale || "").slice(0, 120)}</td>
     </tr>
   `).join("");
 }
@@ -72,7 +70,7 @@ function renderTrades(items) {
 function pushEventLine(text, ts) {
   const box = $("eventStream");
   const div = document.createElement("div");
-  div.className = "muted";
+  div.className = "evtLine";
   div.textContent = `${fmtTime(ts)}  ${text}`;
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
@@ -84,7 +82,7 @@ function formatEvent(msg) {
     return `♻ Carousel → ${msg.payload?.symbol} • Market: ${m?.open ? "OPEN" : "CLOSED"} (${m?.reason || ""})`;
   }
   if (msg.type === "bot_fight") {
-    return `⚔️ Fight: ${msg.payload?.symbol} • winner=${msg.payload?.winner} • trades=${msg.payload?.tradesAllowed ? "YES" : "NO"} • news=${msg.payload?.features?.newsProvider || "—"}`;
+    return `⚔ Fight: ${msg.payload?.symbol} • winner=${msg.payload?.winner} • trades=${msg.payload?.tradesAllowed ? "YES" : "NO"} • news=${msg.payload?.features?.newsProvider || "—"}`;
   }
   if (msg.type === "trade_recorded") {
     return `💸 Trade: ${msg.payload?.bot} ${msg.payload?.side} ${msg.payload?.symbol} @ ${msg.payload?.price}`;
@@ -101,13 +99,12 @@ function formatEvent(msg) {
   return `${msg.type}`;
 }
 
-// Hydrate from DB so refresh doesn’t “start over”
 async function hydrateEventsFromDb() {
   const box = $("eventStream");
-  box.innerHTML = `<div class="muted">Loading events…</div>`;
+  box.innerHTML = "";
 
   const lastSeen = Number(localStorage.getItem("warroom_last_event_id") || 0);
-  const r = await getJSON(`/api/events/recent?limit=180&afterId=${lastSeen}`);
+  const r = await getJSON(`/api/events/recent?limit=220&afterId=${lastSeen}`);
   const items = r.items || [];
 
   if (!items.length) {
@@ -115,7 +112,6 @@ async function hydrateEventsFromDb() {
     return;
   }
 
-  box.innerHTML = "";
   for (const e of items) {
     pushEventLine(formatEvent(e), e.ts);
     if (e.id) localStorage.setItem("warroom_last_event_id", String(e.id));
@@ -137,7 +133,7 @@ function connectWS() {
       if (msg.type === "carousel_tick") $("curSymbol").textContent = msg.payload?.symbol || "—";
       pushEventLine(formatEvent(msg), msg.ts);
 
-      // refresh key panels on high-signal events
+      if (msg.id) localStorage.setItem("warroom_last_event_id", String(msg.id));
       if (["trade_recorded", "bot_fight", "runner_state"].includes(msg.type)) {
         await refreshPanels();
       }
@@ -146,7 +142,6 @@ function connectWS() {
 }
 
 async function refreshPanels() {
-  // Each block is isolated so one failure doesn’t kill the page
   try {
     const p = await getJSON("/api/portfolios");
     renderBankroll(p.items || []);
@@ -156,8 +151,7 @@ async function refreshPanels() {
     const t = await getJSON("/api/trades/recent?limit=25");
     renderTrades(t.items || []);
   } catch (e) {
-    // show the error in the table so it’s visible
-    $("tradeStreamBody").innerHTML = `<tr><td class="p-3 muted" colspan="7">Trades error: ${String(e.message || e)}</td></tr>`;
+    $("tradeStreamBody").innerHTML = `<tr><td class="muted" colspan="7">Trades error: ${String(e.message || e)}</td></tr>`;
   }
 
   try {
@@ -178,53 +172,49 @@ async function refreshPanels() {
 
 // Drawer
 function openDrawer(bot) {
-  $("drawerBack").classList.remove("hidden");
-  $("drawer").classList.remove("translate-x-full");
+  $("drawerBack").style.display = "block";
+  $("drawer").classList.add("open");
   $("drawerTitle").textContent = `Bot: ${bot}`;
   $("drawerSub").textContent = "Trade history";
-
   loadDrawer(bot);
 }
 
 function closeDrawer() {
-  $("drawerBack").classList.add("hidden");
-  $("drawer").classList.add("translate-x-full");
+  $("drawerBack").style.display = "none";
+  $("drawer").classList.remove("open");
 }
 
 async function loadDrawer(bot) {
   const body = $("drawerBody");
-  body.innerHTML = `<tr><td class="py-3 muted" colspan="5">Loading…</td></tr>`;
+  body.innerHTML = `<tr><td class="muted" colspan="5">Loading…</td></tr>`;
 
   try {
     const out = await getJSON(`/api/trades/bot/${encodeURIComponent(bot)}?limit=120`);
     const items = out.items || [];
     if (!items.length) {
-      body.innerHTML = `<tr><td class="py-3 muted" colspan="5">No trades yet.</td></tr>`;
+      body.innerHTML = `<tr><td class="muted" colspan="5">No trades yet.</td></tr>`;
       return;
     }
     body.innerHTML = items.map((t) => `
-      <tr class="border-t border-white/10">
-        <td class="py-2 text-xs muted">${fmtTime(t.ts)}</td>
-        <td class="py-2">${t.side}</td>
-        <td class="py-2">${t.symbol}</td>
-        <td class="py-2">${Number(t.qty || 0).toFixed(0)}</td>
-        <td class="py-2">$${Number(t.price || 0).toFixed(2)}</td>
+      <tr>
+        <td class="muted">${fmtTime(t.ts)}</td>
+        <td>${t.side}</td>
+        <td>${t.symbol}</td>
+        <td>${Number(t.qty || 0).toFixed(0)}</td>
+        <td>$${Number(t.price || 0).toFixed(2)}</td>
       </tr>
     `).join("");
   } catch (e) {
-    body.innerHTML = `<tr><td class="py-3 muted" colspan="5">Error: ${String(e.message || e)}</td></tr>`;
+    body.innerHTML = `<tr><td class="muted" colspan="5">Error: ${String(e.message || e)}</td></tr>`;
   }
 }
 
 $("drawerClose").onclick = closeDrawer;
 $("drawerBack").onclick = closeDrawer;
 
-// Boot
 (async function boot() {
   await hydrateEventsFromDb();
   await refreshPanels();
   connectWS();
-
-  // periodic refresh as safety net
   setInterval(refreshPanels, 7000);
 })();
