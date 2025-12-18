@@ -27,7 +27,53 @@ app.use(express.static("public"));
 
 // Serve homepage
 app.get("/", (req, res) => {
-  res.sendFile(path.resolve("public", "index.html"));
+  // If you have /public/index.html it will load that (recommended)
+  // Otherwise you’ll see this minimal message
+  try {
+    return res.sendFile(path.resolve("public", "index.html"));
+  } catch {
+    return res.send("OK");
+  }
+});
+
+// ============================================
+// APP VERSION + SETTINGS (FIXES YOUR UI ERRORS)
+// ============================================
+
+const APP_VERSION = "learning-impact-v2";
+
+// Global learning speed setting (Option A: ONE setting for all bots)
+const VALID_SPEEDS = new Set(["realtime", "accelerated"]);
+let learningSpeed = (() => {
+  const v = String(process.env.LEARNING_SPEED || "realtime").toLowerCase().trim();
+  return VALID_SPEEDS.has(v) ? v : "realtime";
+})();
+
+// GET version (your UI calls /api/version)
+app.get("/api/version", (req, res) => {
+  res.json({ version: APP_VERSION, timestamp: new Date().toISOString() });
+});
+
+// GET learning speed (your UI calls /api/settings/learning-speed)
+app.get("/api/settings/learning-speed", (req, res) => {
+  res.json({
+    ok: true,
+    mode: learningSpeed, // "realtime" | "accelerated"
+    label: learningSpeed === "accelerated" ? "Accelerated (fast feedback)" : "Real-time (production)",
+  });
+});
+
+// POST learning speed (so your dropdown can save it)
+app.post("/api/settings/learning-speed", (req, res) => {
+  const incoming = String(req.body?.mode || "").toLowerCase().trim();
+  if (!VALID_SPEEDS.has(incoming)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Invalid mode. Use 'realtime' or 'accelerated'.",
+    });
+  }
+  learningSpeed = incoming;
+  return res.json({ ok: true, mode: learningSpeed });
 });
 
 // ============================================
@@ -37,6 +83,7 @@ app.get("/", (req, res) => {
 async function getStockPrice(symbol) {
   const apiKey = process.env.FINNHUB_API_KEY;
 
+  // No API key → mock
   if (!apiKey) {
     return {
       price: Math.random() * 500 + 100,
@@ -51,7 +98,7 @@ async function getStockPrice(symbol) {
 
   try {
     const response = await fetch(
-      `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${apiKey}`
+      `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`
     );
     const data = await response.json();
 
@@ -72,9 +119,9 @@ async function getStockPrice(symbol) {
 
 function getMockNews(symbol) {
   const templates = [
-    { title: `${symbol} reports strong Q4 earnings`, sentiment: 0.8 },
-    { title: `Analysts upgrade ${symbol} to Buy`, sentiment: 0.6 },
-    { title: `${symbol} announces new product line`, sentiment: 0.5 },
+    { title: `${symbol} reports strong earnings`, sentiment: 0.8 },
+    { title: `Analysts upgrade ${symbol}`, sentiment: 0.6 },
+    { title: `${symbol} announces new product`, sentiment: 0.5 },
     { title: `${symbol} faces regulatory scrutiny`, sentiment: -0.4 },
     { title: `Market volatility affects ${symbol}`, sentiment: -0.2 },
   ];
@@ -89,24 +136,13 @@ function getMockNews(symbol) {
 }
 
 function analyzeSentiment(text) {
-  const positive = [
-    "surge", "growth", "profit", "beat", "strong",
-    "record", "upgrade", "bullish", "gain", "rise",
-  ];
-  const negative = [
-    "drop", "loss", "miss", "weak", "concern",
-    "downgrade", "bearish", "fall", "decline",
-  ];
+  const positive = ["surge", "growth", "profit", "beat", "strong", "record", "upgrade", "bullish", "gain", "rise"];
+  const negative = ["drop", "loss", "miss", "weak", "concern", "downgrade", "bearish", "fall", "decline"];
 
-  const lowerText = (text || "").toLowerCase();
+  const lower = (text || "").toLowerCase();
   let score = 0;
-
-  positive.forEach((word) => {
-    if (lowerText.includes(word)) score += 0.1;
-  });
-  negative.forEach((word) => {
-    if (lowerText.includes(word)) score -= 0.1;
-  });
+  positive.forEach((w) => { if (lower.includes(w)) score += 0.1; });
+  negative.forEach((w) => { if (lower.includes(w)) score -= 0.1; });
 
   return Math.max(-1, Math.min(1, score));
 }
@@ -117,26 +153,22 @@ async function getCompanyNews(symbol) {
 
   try {
     const today = new Date().toISOString().split("T")[0];
-    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
-      .toISOString()
-      .split("T")[0];
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
     const response = await fetch(
-      `https://newsapi.org/v2/everything?q=${symbol}&from=${weekAgo}&to=${today}&sortBy=relevancy&apiKey=${apiKey}`
+      `https://newsapi.org/v2/everything?q=${encodeURIComponent(symbol)}&from=${weekAgo}&to=${today}&sortBy=relevancy&apiKey=${apiKey}`
     );
 
     const data = await response.json();
 
     return (
-      data.articles?.slice(0, 10).map((article) => ({
-        title: article.title,
-        description: article.description,
-        url: article.url,
-        publishedAt: article.publishedAt,
-        source: article.source?.name || "Unknown",
-        sentiment: analyzeSentiment(
-          (article.title || "") + " " + (article.description || "")
-        ),
+      data.articles?.slice(0, 10).map((a) => ({
+        title: a.title,
+        description: a.description,
+        url: a.url,
+        publishedAt: a.publishedAt,
+        source: a.source?.name || "Unknown",
+        sentiment: analyzeSentiment((a.title || "") + " " + (a.description || "")),
       })) || []
     );
   } catch (error) {
@@ -145,39 +177,11 @@ async function getCompanyNews(symbol) {
   }
 }
 
-function generateBasicAnalysis(symbol, news, priceData) {
-  const sentimentScore =
-    news.reduce((sum, n) => sum + (n.sentiment || 0), 0) / (news.length || 1);
-  const priceChange = priceData?.changePercent || 0;
-
-  let signal = "HOLD";
-  let confidence = 50;
-
-  if (sentimentScore > 0.3 && priceChange > 2) {
-    signal = "BUY"; confidence = 75;
-  } else if (sentimentScore > 0.1 && priceChange > 0) {
-    signal = "BUY"; confidence = 65;
-  } else if (sentimentScore < -0.3 && priceChange < -2) {
-    signal = "SELL"; confidence = 75;
-  } else if (sentimentScore < -0.1 && priceChange < 0) {
-    signal = "SELL"; confidence = 65;
-  }
-
-  return {
-    signal,
-    confidence,
-    reasoning: `Based on sentiment (${sentimentScore.toFixed(2)}) and price trend (${priceChange.toFixed(2)}%)`,
-    targetPrice: priceData.price * (signal === "BUY" ? 1.05 : 0.95),
-    stopLoss: priceData.price * (signal === "BUY" ? 0.95 : 1.05),
-    timeHorizon: Math.abs(priceChange) > 3 ? "short" : "medium",
-  };
-}
-
 // ============================================
 // API ENDPOINTS
 // ============================================
 
-// Fast popular stocks (no AI, no news) for UI speed
+// Fast popular stocks (speed)
 app.get("/api/popular-fast", async (req, res) => {
   try {
     const symbols = ["AAPL", "NVDA", "TSLA", "MSFT", "GOOGL", "META"];
@@ -190,14 +194,7 @@ app.get("/api/popular-fast", async (req, res) => {
       const signal = change > 1 ? "BUY" : change < -1 ? "SELL" : "HOLD";
       const confidence = Math.min(90, Math.max(50, Math.round(Math.abs(change) * 15 + 50)));
 
-      return {
-        symbol,
-        price: priceData.price,
-        change,
-        signal,
-        confidence,
-        reasoning: "Fast signal (no AI) for quick overview",
-      };
+      return { symbol, price: priceData.price, change, signal, confidence, reasoning: "Fast signal (no AI)" };
     }));
 
     res.json(data.filter(Boolean));
@@ -206,17 +203,18 @@ app.get("/api/popular-fast", async (req, res) => {
   }
 });
 
-// News endpoint separated from analysis (reliable UI)
+// News only
 app.get("/api/news/:symbol", async (req, res) => {
   try {
-    const news = await getCompanyNews(req.params.symbol);
+    const symbol = String(req.params.symbol || "").toUpperCase().trim();
+    const news = await getCompanyNews(symbol);
     res.json({ news: (news || []).slice(0, 10) });
   } catch (e) {
     res.status(500).json({ error: e.message, news: [] });
   }
 });
 
-// Learning impact over time (NEW)
+// Learning impact over time
 app.get("/api/learning/impact/:symbol", async (req, res) => {
   try {
     const symbol = String(req.params.symbol || "").toUpperCase().trim();
@@ -242,7 +240,7 @@ app.get("/api/learning/impact/:symbol", async (req, res) => {
   }
 });
 
-// Persist learning outcome (writes to Postgres)
+// Persist learning outcome
 app.post("/api/learn", async (req, res) => {
   try {
     const { symbol, signal, priceAtSignal, priceAfter, strategy, horizon } = req.body;
@@ -286,7 +284,8 @@ app.get("/api/health", (req, res) => {
       openai: !!process.env.OPENAI_API_KEY,
       postgres: hasDb(),
     },
-    version: "learning-impact-v1",
+    version: APP_VERSION,
+    learningSpeed,
   });
 });
 
