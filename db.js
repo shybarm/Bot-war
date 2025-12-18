@@ -1,26 +1,27 @@
-// db.js (ESM)
+// db.js
 import pg from "pg";
+
 const { Pool } = pg;
 
-function buildPoolConfig() {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) return null;
+export const hasDb = !!process.env.DATABASE_URL;
 
-  const ssl =
-    process.env.PGSSL_DISABLE === "true"
-      ? false
-      : { rejectUnauthorized: false };
+let pool = null;
 
-  return { connectionString, ssl };
+export function getPool() {
+  if (!hasDb) return null;
+  if (!pool) {
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
+    });
+  }
+  return pool;
 }
 
-const poolConfig = buildPoolConfig();
-export const hasDb = !!poolConfig;
-export const pool = hasDb ? new Pool(poolConfig) : null;
-
 export async function dbQuery(sql, params = []) {
-  if (!hasDb) throw new Error("DB not configured (DATABASE_URL missing)");
-  return pool.query(sql, params);
+  if (!hasDb) throw new Error("DATABASE_URL not configured");
+  const p = getPool();
+  return p.query(sql, params);
 }
 
 export async function dbInit() {
@@ -29,7 +30,7 @@ export async function dbInit() {
   await dbQuery(`
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
-      value JSONB NOT NULL,
+      value JSONB NOT NULL DEFAULT '{}'::jsonb,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
@@ -37,7 +38,7 @@ export async function dbInit() {
   await dbQuery(`
     CREATE TABLE IF NOT EXISTS runner_state (
       id TEXT PRIMARY KEY,
-      value JSONB NOT NULL,
+      value JSONB NOT NULL DEFAULT '{}'::jsonb,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
@@ -45,9 +46,8 @@ export async function dbInit() {
   await dbQuery(`
     CREATE TABLE IF NOT EXISTS portfolios (
       bot TEXT PRIMARY KEY,
-      cash NUMERIC NOT NULL,
-      goal NUMERIC NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      cash NUMERIC NOT NULL DEFAULT 100000,
+      goal NUMERIC NOT NULL DEFAULT 150000,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
@@ -63,6 +63,7 @@ export async function dbInit() {
     );
   `);
 
+  // Trades: create if missing
   await dbQuery(`
     CREATE TABLE IF NOT EXISTS trades (
       id BIGSERIAL PRIMARY KEY,
@@ -78,9 +79,13 @@ export async function dbInit() {
     );
   `);
 
-  // Add features column to trades (for “why” + bot history insight)
+  // ✅ MIGRATION: production may have trades without ts
+  await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS ts TIMESTAMPTZ NOT NULL DEFAULT NOW();`);
+
+  // Features payload (for evidence in UI)
   await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS features JSONB NOT NULL DEFAULT '{}'::jsonb;`);
 
+  // Learning samples
   await dbQuery(`
     CREATE TABLE IF NOT EXISTS learning_samples (
       id BIGSERIAL PRIMARY KEY,
@@ -102,6 +107,7 @@ export async function dbInit() {
     );
   `);
 
+  // Events table
   await dbQuery(`
     CREATE TABLE IF NOT EXISTS events (
       id BIGSERIAL PRIMARY KEY,
@@ -111,7 +117,7 @@ export async function dbInit() {
     );
   `);
 
-  // Online learning model weights (simple logistic regression)
+  // Online learning weights
   await dbQuery(`
     CREATE TABLE IF NOT EXISTS model_weights (
       strategy TEXT NOT NULL,
@@ -141,10 +147,9 @@ export async function dbInit() {
     ON CONFLICT (id) DO NOTHING;
   `);
 
-  // Initialize weights for all strategies and base features (bias, avgSent, changePercent)
+  // Initialize weights
   const strategies = ["sp500_long", "market_swing", "day_trade", "news_only"];
   const features = ["bias", "avgSent", "changePercent"];
-
   for (const s of strategies) {
     for (const f of features) {
       await dbQuery(
@@ -201,10 +206,7 @@ export async function setRunnerState(valueObj) {
 
 export async function getWeights(strategy) {
   if (!hasDb) return { bias: 0, avgSent: 0, changePercent: 0 };
-  const r = await dbQuery(
-    `SELECT feature, weight FROM model_weights WHERE strategy=$1`,
-    [strategy]
-  );
+  const r = await dbQuery(`SELECT feature, weight FROM model_weights WHERE strategy=$1`, [strategy]);
   const w = { bias: 0, avgSent: 0, changePercent: 0 };
   for (const row of r.rows) w[row.feature] = Number(row.weight);
   return w;
