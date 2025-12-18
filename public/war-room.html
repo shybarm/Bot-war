@@ -5,93 +5,96 @@
   <title>AI Trading War Room</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-  <!-- TradingView Lightweight Charts -->
   <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 
   <style>
     body {
       margin: 0;
-      background: #0d0f1a;
+      background: radial-gradient(circle at top, #14182c, #0b0e19);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       color: #e4e8ff;
       overflow: hidden;
     }
 
     .header {
-      padding: 18px 30px;
+      padding: 18px 28px;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      background: rgba(20, 22, 35, 0.8);
+      background: rgba(20,22,40,0.85);
       border-bottom: 1px solid rgba(255,255,255,0.08);
-      backdrop-filter: blur(8px);
+      backdrop-filter: blur(10px);
     }
 
     .title {
-      font-size: 24px;
+      font-size: 26px;
       font-weight: 600;
+      letter-spacing: 0.4px;
       color: #9bb4ff;
     }
 
     .status-pill {
       padding: 6px 12px;
-      background: rgba(0,255,170,0.1);
-      border: 1px solid rgba(0,255,170,0.3);
       border-radius: 8px;
-      color: #00ffae;
       font-size: 13px;
       margin-left: 10px;
+      background: rgba(0,255,170,0.12);
+      border: 1px solid rgba(0,255,170,0.35);
+      color: #00ffae;
     }
 
     .layout {
       display: grid;
-      grid-template-columns: 300px 1fr 380px;
-      height: calc(100vh - 70px);
+      grid-template-columns: 340px 1fr 420px;
+      height: calc(100vh - 72px);
     }
 
-    /* Left Column - Bot cards */
+    /* LEFT — BOT SCOREBOARD */
     .left {
-      padding: 20px;
+      padding: 18px;
       overflow-y: auto;
     }
 
     .bot-card {
-      background: rgba(255,255,255,0.03);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 12px;
+      background: rgba(255,255,255,0.035);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 14px;
       padding: 16px;
-      margin-bottom: 20px;
-      box-shadow: 0 0 12px rgba(96, 120, 255, 0.15);
+      margin-bottom: 18px;
+      box-shadow: 0 0 18px rgba(120,140,255,0.12);
     }
 
     .bot-title {
       font-size: 18px;
-      margin-bottom: 8px;
-      color: #bcd0ff;
+      font-weight: 600;
+      margin-bottom: 6px;
     }
 
-    .progress-bar {
-      width: 100%;
+    .bot-meta {
+      font-size: 13px;
+      opacity: 0.75;
+    }
+
+    .progress {
       height: 8px;
-      background: rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.08);
       border-radius: 6px;
-      margin: 10px 0;
       overflow: hidden;
+      margin-top: 10px;
     }
 
     .progress-inner {
       height: 100%;
-      background: linear-gradient(90deg, #6078ff, #9bb4ff);
-      width: 0%;
-      transition: width 0.5s;
+      background: linear-gradient(90deg, #6b8cff, #9bb4ff);
+      transition: width 0.6s ease;
     }
 
-    /* Center - Chart & Log */
+    /* CENTER — CHART + COMBAT LOG */
     .center {
       display: flex;
       flex-direction: column;
-      border-left: 1px solid rgba(255,255,255,0.05);
-      border-right: 1px solid rgba(255,255,255,0.05);
+      border-left: 1px solid rgba(255,255,255,0.06);
+      border-right: 1px solid rgba(255,255,255,0.06);
     }
 
     #chart {
@@ -99,35 +102,35 @@
       border-bottom: 1px solid rgba(255,255,255,0.08);
     }
 
-    #log {
+    #combat-log {
       height: 45%;
+      padding: 16px 20px;
       overflow-y: auto;
-      padding: 20px;
       font-family: "SF Mono", Menlo, monospace;
       font-size: 13px;
     }
 
     .log-line {
       padding: 4px 0;
-      color: #9bb4ff;
+      opacity: 0.85;
     }
 
-    /* Right Column - Trades */
+    /* RIGHT — TRADE LEDGER */
     .right {
-      padding: 20px;
+      padding: 18px;
       overflow-y: auto;
     }
 
-    .trade-row {
-      background: rgba(255,255,255,0.03);
-      border: 1px solid rgba(255,255,255,0.07);
+    .trade {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
       padding: 12px;
       margin-bottom: 12px;
-      border-radius: 8px;
     }
 
-    .trade-buy { color: #00ffae; }
-    .trade-sell { color: #ff497c; }
+    .buy { color: #00ffae; }
+    .sell { color: #ff5b8a; }
 
   </style>
 </head>
@@ -137,27 +140,24 @@
 <div class="header">
   <div class="title">AI Trading War Room</div>
   <div>
-    <span id="ws-status" class="status-pill">WS: CONNECTING...</span>
-    <span id="current-symbol" class="status-pill">Symbol: —</span>
+    <span id="ws-status" class="status-pill">WS: CONNECTING</span>
+    <span id="active-symbol" class="status-pill">Symbol: —</span>
   </div>
 </div>
 
 <div class="layout">
 
-  <!-- LEFT: BOT STATUS -->
-  <div class="left" id="bots-panel">
-    <!-- Filled via JS -->
-  </div>
+  <!-- BOT SCOREBOARD -->
+  <div class="left" id="bots"></div>
 
-  <!-- CENTER: Chart + Log -->
+  <!-- CHART + COMBAT LOG -->
   <div class="center">
     <div id="chart"></div>
-    <div id="log"></div>
+    <div id="combat-log"></div>
   </div>
 
-  <!-- RIGHT: TRADES LIST -->
-  <div class="right" id="trades-panel">
-  </div>
+  <!-- TRADE LEDGER -->
+  <div class="right" id="trades"></div>
 
 </div>
 
