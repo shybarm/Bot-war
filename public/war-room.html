@@ -4,145 +4,221 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>War Room</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.1/dist/tailwind.min.css">
   <style>
+    :root{
+      --bg:#070a12;
+      --panel:rgba(255,255,255,.07);
+      --panel2:rgba(255,255,255,.045);
+      --stroke:rgba(255,255,255,.10);
+      --text:rgba(255,255,255,.92);
+      --muted:rgba(255,255,255,.62);
+      --muted2:rgba(255,255,255,.52);
+      --shadow:0 18px 80px rgba(0,0,0,.55);
+      --r:18px;
+    }
+    html,body{height:100%;}
     body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      color:var(--text);
       background:
         radial-gradient(1200px 700px at 20% 10%, rgba(120,119,198,.22), transparent 55%),
         radial-gradient(900px 600px at 80% 15%, rgba(236,72,153,.14), transparent 55%),
         radial-gradient(900px 600px at 70% 90%, rgba(34,211,238,.10), transparent 55%),
-        #070a12;
-      color: rgba(255,255,255,.92);
+        var(--bg);
     }
-    .glass{
-      background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.045));
-      border: 1px solid rgba(255,255,255,.10);
+    .wrap{max-width:1200px;margin:0 auto;padding:26px 18px 50px;}
+    .top{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}
+    h1{margin:0;font-size:38px;letter-spacing:-.02em}
+    .sub{margin-top:8px;color:var(--muted);max-width:760px;line-height:1.45}
+    .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .btn{
+      cursor:pointer;text-decoration:none;user-select:none;
+      padding:10px 12px;border-radius:12px;background:var(--panel);
+      border:1px solid var(--stroke);color:var(--text);
+      font-weight:700;font-size:13px;
+      transition:.15s transform, .15s background;
+      display:inline-flex;gap:8px;align-items:center;
+    }
+    .btn:hover{transform:translateY(-1px);background:rgba(255,255,255,.085)}
+    .pill{
+      padding:10px 12px;border-radius:999px;background:rgba(255,255,255,.04);
+      border:1px solid var(--stroke);color:var(--muted);font-size:12px;
+    }
+
+    .grid{display:grid;gap:14px;margin-top:18px;}
+    .grid3{grid-template-columns:360px 1fr 1fr;}
+    @media (max-width:1050px){.grid3{grid-template-columns:1fr;}}
+    .card{
+      background:linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.045));
+      border:1px solid var(--stroke);
+      border-radius:var(--r);
+      box-shadow:var(--shadow);
       backdrop-filter: blur(10px);
-      box-shadow: 0 18px 80px rgba(0,0,0,.55);
+      padding:16px;
     }
-    .muted{color: rgba(255,255,255,.62);}
+    .card h3{margin:0 0 8px;font-size:16px;letter-spacing:.01em}
+    .muted{color:var(--muted);}
+    .bankGrid{display:grid;gap:10px;margin-top:10px}
+    .bankCard{
+      padding:12px;border-radius:16px;border:1px solid rgba(255,255,255,.10);
+      background:rgba(0,0,0,.18);cursor:pointer;
+    }
+    .bankCard:hover{background:rgba(255,255,255,.06)}
+    .bar{height:8px;border-radius:999px;background:rgba(255,255,255,.10);overflow:hidden;margin-top:10px}
+    .bar > div{height:100%;background:rgba(110,231,183,.85)}
+    .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .big{font-size:34px;font-weight:900;letter-spacing:-.02em}
+    .evt{
+      height:320px;overflow:auto;border-radius:16px;border:1px solid rgba(255,255,255,.10);
+      background:rgba(0,0,0,.18);padding:10px;font-size:13px;line-height:1.45;
+    }
+    .evtLine{color:var(--muted);padding:6px 6px;border-bottom:1px solid rgba(255,255,255,.06)}
+    .tableWrap{
+      overflow:auto;border-radius:16px;border:1px solid rgba(255,255,255,.10);
+      background:rgba(0,0,0,.18);
+    }
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th,td{padding:10px 10px;text-align:left;border-top:1px solid rgba(255,255,255,.08)}
+    th{border-top:0;color:var(--muted2);font-weight:800;font-size:12px}
+    .drawerBack{
+      position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;z-index:50;
+    }
+    .drawer{
+      position:fixed;top:0;right:0;height:100%;width:min(560px, 100%);
+      transform:translateX(100%);
+      transition:transform .2s ease;
+      z-index:60;
+      background:linear-gradient(180deg, rgba(20,23,38,.92), rgba(10,12,22,.92));
+      border-left:1px solid rgba(255,255,255,.10);
+      box-shadow:0 22px 120px rgba(0,0,0,.65);
+      padding:14px;
+    }
+    .drawer.open{transform:translateX(0);}
+    .drawerHead{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .drawerTitle{font-weight:900;font-size:16px}
+    .drawerSub{color:var(--muted);font-size:13px;margin-top:4px}
+    .close{
+      cursor:pointer;border:1px solid var(--stroke);background:rgba(255,255,255,.05);color:var(--text);
+      border-radius:12px;padding:9px 12px;font-weight:900;
+    }
   </style>
 </head>
-<body class="min-h-screen">
-  <div class="max-w-6xl mx-auto px-4 py-6">
-    <div class="flex items-start justify-between gap-3">
+<body>
+  <div class="wrap">
+    <div class="top">
       <div>
-        <div class="text-4xl font-extrabold tracking-tight flex items-center gap-3">⚔️ War Room</div>
-        <div class="muted mt-1">Real-time command center: carousel ticks, bot fights, trades, learning evaluations.</div>
+        <h1>⚔️ War Room</h1>
+        <div class="sub">Real-time command center: carousel ticks, bot fights, trades, learning evaluations. WebSocket-first with DB hydration.</div>
       </div>
-      <div class="flex items-center gap-2">
-        <a class="px-3 py-2 rounded-xl glass hover:opacity-90" href="/">← Arena</a>
-        <a class="px-3 py-2 rounded-xl glass hover:opacity-90" href="/api/runner/status" target="_blank">Runner Status</a>
+      <div class="actions">
+        <a class="btn" href="/">← Arena</a>
+        <a class="btn" href="/api/runner/status" target="_blank">Runner Status</a>
+        <div class="pill" id="wsStatus">WS: connecting…</div>
       </div>
     </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-6">
-      <!-- Left -->
-      <div class="glass rounded-2xl p-4">
-        <div class="text-lg font-extrabold">Bot bankrolls</div>
-        <div class="muted text-sm">$100k start → $150k goal</div>
-        <div id="bankrollGrid" class="mt-3 grid gap-2"></div>
+    <div class="grid grid3">
+      <!-- Left column -->
+      <div class="card">
+        <h3>Bot bankrolls</h3>
+        <div class="muted">$100k start → $150k goal</div>
+        <div id="bankrollGrid" class="bankGrid"></div>
 
-        <div class="mt-6">
-          <div class="text-lg font-extrabold">Runner</div>
-          <div id="runnerInfo" class="muted text-sm mt-2">Loading…</div>
+        <div style="margin-top:16px;">
+          <h3>Runner</h3>
+          <div id="runnerInfo" class="muted">Loading…</div>
         </div>
 
-        <div class="glass rounded-2xl p-4 mt-6">
-          <div class="text-xs muted uppercase tracking-wider">Inspector</div>
-          <div class="mt-2 text-sm">
-            Click a bot card to open trade history + learning context.
+        <div class="card" style="margin-top:14px;background:rgba(255,255,255,.04);box-shadow:none">
+          <div class="muted" style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;">Inspector</div>
+          <div style="margin-top:8px;font-size:13px;line-height:1.45;">
+            Click a bot card to open the drawer. You’ll see trade history and the decision stream behind it.
           </div>
         </div>
       </div>
 
-      <!-- Center/Right -->
-      <div class="glass rounded-2xl p-4 lg:col-span-2">
-        <div class="flex items-start justify-between gap-3">
+      <!-- Middle -->
+      <div class="card">
+        <div class="row">
           <div>
-            <div class="text-lg font-extrabold">Live feed</div>
-            <div class="muted text-sm">WebSocket-first • REST fallback</div>
-          </div>
-          <div id="wsStatus" class="px-3 py-2 rounded-xl glass text-xs">WS: connecting…</div>
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
-          <div class="glass rounded-2xl p-4">
-            <div class="muted text-xs">Current carousel symbol</div>
-            <div id="curSymbol" class="text-3xl font-extrabold mt-2">—</div>
-          </div>
-          <div class="glass rounded-2xl p-4">
-            <div class="muted text-xs">Last event</div>
-            <div id="lastEvent" class="text-sm mt-2 muted">—</div>
+            <h3>Live feed</h3>
+            <div class="muted">Current carousel symbol + last high-signal event</div>
           </div>
         </div>
 
-        <div class="mt-5">
-          <div class="flex items-center justify-between">
-            <div class="text-lg font-extrabold">Reasoning + events</div>
-            <div class="muted text-xs">Persisted via DB hydration</div>
+        <div class="grid" style="grid-template-columns:1fr 1fr;margin-top:10px;">
+          <div class="card" style="padding:14px;background:rgba(0,0,0,.18);box-shadow:none">
+            <div class="muted" style="font-size:12px;">Current carousel symbol</div>
+            <div id="curSymbol" class="big">—</div>
           </div>
-          <div id="eventStream" class="mt-3 h-64 overflow-auto rounded-2xl glass p-3 text-sm">
+          <div class="card" style="padding:14px;background:rgba(0,0,0,.18);box-shadow:none">
+            <div class="muted" style="font-size:12px;">Last event</div>
+            <div id="lastEvent" class="muted" style="margin-top:6px;">—</div>
+          </div>
+        </div>
+
+        <div style="margin-top:14px;">
+          <div class="row">
+            <h3 style="margin:0;">Reasoning + events</h3>
+            <div class="muted" style="font-size:12px;">Persisted via DB hydration</div>
+          </div>
+          <div id="eventStream" class="evt" style="margin-top:10px;">
             <div class="muted">Loading…</div>
           </div>
         </div>
+      </div>
 
-        <div class="mt-6">
-          <div class="flex items-center justify-between">
-            <div class="text-lg font-extrabold">Trades stream</div>
-            <div class="muted text-xs">Most recent executions</div>
+      <!-- Right -->
+      <div class="card">
+        <div class="row">
+          <div>
+            <h3>Trades stream</h3>
+            <div class="muted">Most recent executions (if any)</div>
           </div>
-          <div class="mt-3 overflow-auto rounded-2xl glass">
-            <table class="w-full text-sm">
-              <thead class="text-xs muted">
-                <tr>
-                  <th class="text-left p-3">Time</th>
-                  <th class="text-left p-3">Bot</th>
-                  <th class="text-left p-3">Side</th>
-                  <th class="text-left p-3">Symbol</th>
-                  <th class="text-left p-3">Qty</th>
-                  <th class="text-left p-3">Price</th>
-                  <th class="text-left p-3">Why</th>
-                </tr>
-              </thead>
-              <tbody id="tradeStreamBody">
-                <tr><td class="p-3 muted" colspan="7">—</td></tr>
-              </tbody>
-            </table>
-          </div>
+        </div>
+
+        <div class="tableWrap" style="margin-top:10px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th><th>Bot</th><th>Side</th><th>Symbol</th><th>Qty</th><th>Price</th><th>Why</th>
+              </tr>
+            </thead>
+            <tbody id="tradeStreamBody">
+              <tr><td class="muted" colspan="7">—</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
   </div>
 
   <!-- Drawer -->
-  <div id="drawerBack" class="fixed inset-0 bg-black/60 hidden"></div>
-  <div id="drawer" class="fixed top-0 right-0 h-full w-full sm:w-[520px] glass border-l border-white/10 translate-x-full transition-transform duration-200">
-    <div class="p-4 flex items-center justify-between border-b border-white/10">
+  <div id="drawerBack" class="drawerBack"></div>
+  <div id="drawer" class="drawer">
+    <div class="drawerHead">
       <div>
-        <div id="drawerTitle" class="font-extrabold text-lg">Bot</div>
-        <div id="drawerSub" class="muted text-sm">—</div>
+        <div id="drawerTitle" class="drawerTitle">Bot</div>
+        <div id="drawerSub" class="drawerSub">—</div>
       </div>
-      <button id="drawerClose" class="px-3 py-2 rounded-xl glass text-sm font-bold hover:opacity-90">Close</button>
+      <button id="drawerClose" class="close">Close</button>
     </div>
-    <div class="p-4 overflow-auto h-[calc(100%-64px)]">
-      <div class="muted text-xs uppercase tracking-wider">Recent trades</div>
-      <table class="w-full text-sm mt-2">
-        <thead class="text-xs muted">
-          <tr>
-            <th class="text-left py-2">Time</th>
-            <th class="text-left py-2">Side</th>
-            <th class="text-left py-2">Symbol</th>
-            <th class="text-left py-2">Qty</th>
-            <th class="text-left py-2">Price</th>
-          </tr>
-        </thead>
-        <tbody id="drawerBody">
-          <tr><td class="py-3 muted" colspan="5">Loading…</td></tr>
-        </tbody>
-      </table>
-      <div class="mt-4 muted text-xs">
-        Hover the War Room trade stream “Why” for reasoning; learning verdicts are evaluated after the configured horizon.
+
+    <div style="margin-top:14px;">
+      <div class="muted" style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;">Recent trades</div>
+      <div class="tableWrap" style="margin-top:10px;">
+        <table>
+          <thead>
+            <tr><th>Time</th><th>Side</th><th>Symbol</th><th>Qty</th><th>Price</th></tr>
+          </thead>
+          <tbody id="drawerBody">
+            <tr><td class="muted" colspan="5">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:12px;line-height:1.45;">
+        Tip: “Learning evaluated” events appear after the configured horizon. Those outcomes update model weights.
       </div>
     </div>
   </div>
