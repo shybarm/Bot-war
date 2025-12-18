@@ -1,5 +1,20 @@
 const $ = (id) => document.getElementById(id);
 
+/* -----------------------------
+   Strategy Labels (single source of truth)
+------------------------------ */
+const BOT_LABELS = {
+  sp500_long: "S&P500 Long",
+  market_swing: "Market Swing",
+  day_trade: "Day Trading",
+  news_only: "News-Only"
+};
+
+function labelForBotKey(botKey) {
+  const k = String(botKey || "").trim();
+  return BOT_LABELS[k] || k || "—";
+}
+
 async function getJSON(url, opts) {
   const r = await fetch(url, opts);
   const txt = await r.text();
@@ -35,7 +50,10 @@ function renderTrades(items) {
   tb.innerHTML = items.slice(0, 25).map(t => `
     <tr class="border-t border-white/5">
       <td class="py-2 pr-3 muted">${new Date(t.ts).toLocaleString()}</td>
-      <td class="py-2 pr-3">${t.bot}</td>
+      <td class="py-2 pr-3">
+        <div class="font-semibold">${labelForBotKey(t.bot)}</div>
+        <div class="text-xs muted">${t.bot}</div>
+      </td>
       <td class="py-2 pr-3">${t.side}</td>
       <td class="py-2 pr-3">${t.symbol}</td>
       <td class="py-2 pr-3">${Number(t.qty || 0).toFixed(3)}</td>
@@ -59,18 +77,22 @@ function renderBankroll(items) {
     const cash = Number(p.cash);
     const goal = Number(p.goal);
     const pct = Math.max(0, Math.min(100, (cash / goal) * 100));
+    const nice = labelForBotKey(p.bot);
 
-    // CLICKABLE button + data attributes
     return `
       <button
         class="chip w-full text-left rounded-2xl p-4 hover:opacity-95 focus:outline-none"
         data-bot="${p.bot}"
-        data-label="${p.bot}"
+        data-label="${nice}"
       >
-        <div class="flex items-center justify-between">
-          <div class="font-semibold">${p.bot}</div>
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <div class="font-semibold">${nice}</div>
+            <div class="text-xs muted mt-0.5">${p.bot}</div>
+          </div>
           <div class="text-xs muted">$${cash.toFixed(2)}</div>
         </div>
+
         <div class="mt-3 h-2 rounded-full bg-white/10 overflow-hidden">
           <div style="width:${pct}%" class="h-2 bg-gradient-to-r from-indigo-500 to-fuchsia-500"></div>
         </div>
@@ -79,11 +101,10 @@ function renderBankroll(items) {
     `;
   }).join("");
 
-  // Wire clicks after render
   box.querySelectorAll("button[data-bot]").forEach(btn => {
     btn.addEventListener("click", () => {
       const bot = btn.getAttribute("data-bot");
-      const label = btn.getAttribute("data-label") || bot;
+      const label = btn.getAttribute("data-label") || labelForBotKey(bot);
       openBotDrawer(bot, label).catch(() => {});
     });
   });
@@ -112,7 +133,7 @@ async function refreshWarRoom() {
 }
 
 /* -----------------------------
-   Bot Drawer (Phase 3+4)
+   Drawer
 ------------------------------ */
 let drawerOpen = false;
 let activeDrawerBot = null;
@@ -140,11 +161,6 @@ function verdictChip(v) {
   return `<span class="chip px-2 py-1 rounded-lg text-xs">PENDING</span>`;
 }
 
-/**
- * Bot-level learning stats endpoint (Phase 4 server.js)
- * GET /api/learning/verdicts?bot=...
- * -> provides stats for win-rate KPI (not trade-level mapping).
- */
 async function loadBotVerdictStats(bot) {
   try {
     const out = await getJSON(`/api/learning/verdicts?bot=${encodeURIComponent(bot)}`);
@@ -165,7 +181,6 @@ async function loadBotPortfolio(bot) {
 }
 
 function computeWinRateFromTrades(items) {
-  // Prefer trade-level verdicts for KPI if present
   let win = 0, loss = 0, pending = 0;
   for (const t of (items || [])) {
     const v = String(t.learningVerdict || "PENDING").toUpperCase();
@@ -179,26 +194,18 @@ function computeWinRateFromTrades(items) {
 }
 
 function renderDrawerHeader({ bot, label, portfolio, tradesCount, tradeKpi, statsFallback }) {
-  $("drawerTitle").textContent = label || bot;
-  $("drawerSub").textContent = bot ? `Strategy key: ${bot}` : "—";
+  $("drawerTitle").textContent = label || labelForBotKey(bot);
+  $("drawerSub").textContent = `Strategy: ${labelForBotKey(bot)} • Key: ${bot}`;
 
-  if (portfolio) {
-    $("drawerCash").textContent = `$${Number(portfolio.cash || 0).toFixed(2)}`;
-  } else {
-    $("drawerCash").textContent = "—";
-  }
+  if (portfolio) $("drawerCash").textContent = `$${Number(portfolio.cash || 0).toFixed(2)}`;
+  else $("drawerCash").textContent = "—";
 
   $("drawerTradesCount").textContent = String(tradesCount ?? "—");
 
-  // Win rate priority:
-  // 1) trade-level verdict KPI (best UX)
-  // 2) server stats fallback
   let wr = (tradeKpi && tradeKpi.winRate != null) ? tradeKpi.winRate : null;
-
   if (wr == null && statsFallback && (statsFallback.win + statsFallback.loss) > 0) {
     wr = Math.round((statsFallback.win / (statsFallback.win + statsFallback.loss)) * 100);
   }
-
   $("drawerWinRate").textContent = (wr == null) ? "—" : `${wr}%`;
 }
 
@@ -230,10 +237,9 @@ async function openBotDrawer(bot, label) {
   activeDrawerBot = bot;
   activeDrawerLabel = label;
 
-  // Open immediately (perceived performance)
   showDrawer();
 
-  $("drawerTitle").textContent = label || bot;
+  $("drawerTitle").textContent = label || labelForBotKey(bot);
   $("drawerSub").textContent = "Loading bot intelligence…";
   $("drawerCash").textContent = "—";
   $("drawerWinRate").textContent = "—";
@@ -241,7 +247,6 @@ async function openBotDrawer(bot, label) {
   $("drawerLastUpdated").textContent = "—";
   $("drawerTradesBody").innerHTML = `<tr class="muted"><td class="py-3" colspan="7">Loading…</td></tr>`;
 
-  // Fetch portfolio + trades + stats
   const [portfolio, tradesOut, statsFallback] = await Promise.all([
     loadBotPortfolio(bot),
     getJSON(`/api/trades/bot/${encodeURIComponent(bot)}?limit=300`).catch(() => ({ items: [] })),
@@ -260,13 +265,8 @@ async function openBotDrawer(bot, label) {
     statsFallback
   });
 
-  // Drawer subtitle: make it explicit that verdicts are real and time-delayed
-  $("drawerSub").textContent =
-    "Full trade history + learning verdicts (evaluated after horizon)";
-
+  $("drawerSub").textContent = "Full trade history + learning verdicts (evaluated after horizon)";
   $("drawerLastUpdated").textContent = `Updated: ${new Date().toLocaleTimeString()}`;
-
-  // Render trade table
   renderDrawerTrades(items);
 }
 
@@ -296,12 +296,10 @@ function connectWS() {
         const sym = msg.payload?.symbol;
         const winner = msg.payload?.winner;
         const allowed = msg.payload?.tradesAllowed;
-        pushEventLine(`⚔️ Fight: ${sym} • winner=${winner} • trades=${allowed ? "YES" : "NO"}`);
+        pushEventLine(`⚔️ Fight: ${sym} • winner=${labelForBotKey(winner)} • trades=${allowed ? "YES" : "NO"}`);
 
-        // Refresh core panels
         await refreshWarRoom();
 
-        // If drawer is open, refresh its content (keeps drawer “alive”)
         if (drawerOpen && activeDrawerBot) {
           openBotDrawer(activeDrawerBot, activeDrawerLabel).catch(() => {});
         }
@@ -310,7 +308,6 @@ function connectWS() {
       if (msg.type === "learning_evaluated") {
         pushEventLine(`🧠 Learning evaluated: ${msg.payload?.evaluated || 0} samples`);
 
-        // Refresh drawer so verdict chips can flip from PENDING -> WIN/LOSS
         if (drawerOpen && activeDrawerBot) {
           openBotDrawer(activeDrawerBot, activeDrawerLabel).catch(() => {});
         }
@@ -322,7 +319,7 @@ function connectWS() {
 }
 
 /* -----------------------------
-   Drawer close handlers
+   Drawer controls
 ------------------------------ */
 function wireDrawerControls() {
   const overlay = $("drawerOverlay");
@@ -343,7 +340,5 @@ function wireDrawerControls() {
   wireDrawerControls();
   await refreshWarRoom();
   connectWS();
-
-  // REST fallback refresh cadence (WS is primary)
   setInterval(() => refreshWarRoom().catch(() => {}), 15000);
 })();
