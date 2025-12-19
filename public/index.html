@@ -1,404 +1,447 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AI Trading Arena</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
   <style>
-    :root{
-      --bg:#070a12;
-      --panel:rgba(255,255,255,.06);
-      --panel2:rgba(255,255,255,.04);
-      --stroke:rgba(255,255,255,.10);
-      --text:rgba(255,255,255,.92);
-      --muted:rgba(255,255,255,.66);
-      --muted2:rgba(255,255,255,.5);
-      --good:rgba(110,231,183,.95);
-      --warn:rgba(251,191,36,.95);
-      --bad:rgba(248,113,113,.95);
-      --radius:18px;
-      --shadow:0 18px 80px rgba(0,0,0,.55);
-    }
-    html,body{height:100%;}
     body{
-      margin:0;
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-      color:var(--text);
-      background:
-        radial-gradient(1200px 700px at 20% 10%, rgba(120,119,198,.22), transparent 55%),
-        radial-gradient(900px 600px at 80% 15%, rgba(236,72,153,.14), transparent 55%),
-        radial-gradient(900px 600px at 70% 90%, rgba(34,211,238,.10), transparent 55%),
-        var(--bg);
+      background: radial-gradient(1200px 700px at 20% 10%, rgba(120,119,198,.28), transparent 60%),
+                  radial-gradient(900px 600px at 85% 25%, rgba(236,72,153,.18), transparent 60%),
+                  radial-gradient(900px 700px at 70% 85%, rgba(34,197,94,.10), transparent 55%),
+                  #060712;
+      color: #e7e9ff;
     }
-    .wrap{max-width:1100px;margin:0 auto;padding:28px 18px 60px;}
-    .topbar{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;}
-    .title h1{margin:0;font-size:38px;letter-spacing:-.02em;}
-    .title p{margin:8px 0 0;color:var(--muted);max-width:760px;line-height:1.45}
-    .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
-    .pill{
-      padding:10px 12px;border-radius:999px;background:var(--panel2);
-      border:1px solid var(--stroke);color:var(--muted);font-size:12px;
+    .glass{
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: 0 20px 80px rgba(0,0,0,0.35);
+      backdrop-filter: blur(14px);
+    }
+    .muted{ color: rgba(231,233,255,0.65); }
+    .chip{
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.04);
     }
     .btn{
-      cursor:pointer;user-select:none;
-      padding:10px 12px;border-radius:12px;background:var(--panel);
-      border:1px solid var(--stroke);color:var(--text);
-      font-weight:600;font-size:13px;
-      transition:.15s transform, .15s opacity, .15s background;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.04);
     }
-    .btn:hover{transform:translateY(-1px);background:rgba(255,255,255,.08)}
-    .grid{display:grid;gap:14px;margin-top:18px;}
-    .grid2{grid-template-columns:1.25fr .75fr;}
-    @media (max-width:980px){.grid2{grid-template-columns:1fr;}}
-    .card{
-      background:linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.045));
-      border:1px solid var(--stroke);border-radius:var(--radius);
-      box-shadow:var(--shadow);
-      padding:16px;
-      backdrop-filter: blur(10px);
-    }
-    .card h3{margin:0 0 8px;font-size:16px;letter-spacing:.01em}
-    .muted{color:var(--muted);}
-    .row{display:flex;gap:10px;align-items:center;justify-content:space-between}
-    .table{width:100%;border-collapse:collapse;font-size:13px}
-    .table th,.table td{padding:10px 8px;border-top:1px solid rgba(255,255,255,.08);text-align:left}
-    .table th{color:var(--muted2);font-weight:700;border-top:0}
-    .kpi{
-      display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px
-    }
-    .kpi .stat{
-      padding:10px 12px;border:1px solid var(--stroke);border-radius:14px;background:rgba(0,0,0,.18);
-      min-width:140px;
-    }
-    .stat .lab{color:var(--muted2);font-size:11px}
-    .stat .val{font-size:16px;font-weight:800;margin-top:4px}
-    .newsItem{
-      padding:12px;border-radius:14px;border:1px solid rgba(255,255,255,.10);
-      background:rgba(0,0,0,.18);
-      cursor:pointer;
-    }
-    .newsItem:hover{background:rgba(255,255,255,.06)}
-    .newsItem .t{font-weight:800;font-size:13px;line-height:1.3}
-    .newsItem .m{color:var(--muted);font-size:12px;margin-top:6px;line-height:1.35}
-    .tag{display:inline-flex;gap:6px;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid var(--stroke);background:rgba(255,255,255,.04);color:var(--muted);font-size:12px}
-    .modalBack{
-      position:fixed;inset:0;background:rgba(0,0,0,.62);
-      display:none;align-items:center;justify-content:center;padding:18px;z-index:50;
-    }
-    .modal{max-width:860px;width:100%;border-radius:22px;border:1px solid var(--stroke);
-      background:linear-gradient(180deg, rgba(20,23,38,.92), rgba(10,12,22,.92));
-      box-shadow:0 22px 120px rgba(0,0,0,.65);
-      padding:16px 16px 14px;
-    }
-    .modal .head{display:flex;align-items:center;justify-content:space-between;gap:10px}
-    .modal .head h2{margin:0;font-size:16px}
-    .close{cursor:pointer;border:1px solid var(--stroke);background:rgba(255,255,255,.04);color:var(--text);border-radius:12px;padding:8px 10px;font-weight:800}
-    .impactGrid{display:grid;grid-template-columns:1.1fr .9fr;gap:14px;margin-top:12px}
-    @media(max-width:980px){.impactGrid{grid-template-columns:1fr}}
-    .impactBox{border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:12px;background:rgba(0,0,0,.18)}
-    .impactList{display:flex;flex-direction:column;gap:8px;margin-top:8px}
-    .impRow{display:flex;gap:10px;align-items:center;justify-content:space-between}
-    .bar{height:8px;border-radius:999px;background:rgba(255,255,255,.10);overflow:hidden;flex:1}
-    .bar > div{height:100%;background:rgba(110,231,183,.85)}
-    .small{font-size:12px;color:var(--muted)}
+    .btn:hover{ background: rgba(255,255,255,0.06); }
+    .row:hover{ background: rgba(255,255,255,0.04); }
+    a{ color: inherit; }
   </style>
 </head>
-<body>
-  <div class="wrap">
-    <div class="topbar">
-      <div class="title">
-        <h1>AI Trading Arena</h1>
-        <p>General news → impacted tickers, with audit-grade evidence. The experience is designed to “show the research.”</p>
+
+<body class="min-h-screen">
+  <div class="max-w-7xl mx-auto px-5 py-10">
+    <!-- Header -->
+    <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6">
+      <div>
+        <div class="text-4xl font-bold tracking-tight">AI Trading Arena</div>
+        <div class="mt-2 muted max-w-2xl">
+          General news → impacted tickers, with audit-grade evidence.
+          This experience is designed to “show the research.”
+        </div>
       </div>
-      <div class="actions">
-        <a class="btn" href="/war-room.html">⚔️ War Room</a>
-        <button class="btn" id="runnerBtn">Runner Status</button>
-        <button class="btn" id="howBtn">How it works</button>
-        <div class="pill" id="apiPill">API: …</div>
-        <div class="pill" id="wsPill">WS: …</div>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <a href="/war-room.html" class="btn px-4 py-2 rounded-xl text-sm font-medium">⚔️ War Room</a>
+        <a href="/runner-status.html" class="btn px-4 py-2 rounded-xl text-sm font-medium">Runner Status</a>
+        <button id="howBtn" class="btn px-4 py-2 rounded-xl text-sm font-medium">How it works</button>
+
+        <span id="apiChip" class="chip px-3 py-2 rounded-xl text-xs muted">API: {}</span>
+        <span id="wsChip" class="chip px-3 py-2 rounded-xl text-xs">
+          WS: <span class="muted">connecting…</span>
+        </span>
       </div>
     </div>
 
-    <div class="grid grid2">
-      <div class="card">
-        <div class="row">
+    <!-- Main grid -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-8">
+      <!-- Left: General news -->
+      <div class="lg:col-span-7 glass rounded-2xl p-6">
+        <div class="flex items-start justify-between gap-4">
           <div>
-            <h3>Top 8 General News → Market Impact</h3>
-            <div class="muted">Click a headline to see impacted tickers + evidence.</div>
+            <div class="text-xl font-semibold">Top 8 General News → Market Impact</div>
+            <div class="muted text-sm mt-1">Click a headline to see impacted tickers + evidence.</div>
           </div>
-          <div class="tag" id="newsProvider">Provider: —</div>
+          <span id="newsProvider" class="chip px-3 py-1.5 rounded-xl text-xs muted">Provider: —</span>
         </div>
-        <div id="generalNews" class="grid" style="grid-template-columns:1fr; margin-top:12px;"></div>
+
+        <div id="newsList" class="mt-5 space-y-3">
+          <div class="muted">Loading…</div>
+        </div>
+
+        <div id="newsEmpty" class="hidden mt-5 chip rounded-xl p-4">
+          <div class="font-semibold">No general news available</div>
+          <div class="muted text-sm mt-1">Configure NEWS keys or fallback will populate.</div>
+        </div>
       </div>
 
-      <div class="card">
-        <div class="row">
+      <!-- Right column -->
+      <div class="lg:col-span-5 glass rounded-2xl p-6">
+        <div class="flex items-start justify-between gap-3">
           <div>
-            <h3>Market Pulse</h3>
-            <div class="muted">Live prices + % change for a reference basket.</div>
+            <div class="text-xl font-semibold">Market Pulse</div>
+            <div class="muted text-sm mt-1">Live prices + % change for a reference basket.</div>
           </div>
-          <div class="tag" id="marketTag">Market: …</div>
+          <span id="marketChip" class="chip px-3 py-1.5 rounded-xl text-xs muted">Market: —</span>
         </div>
-        <table class="table" id="marketTable" style="margin-top:10px;">
-          <thead><tr><th>Symbol</th><th>Price</th><th>Chg%</th><th>Src</th></tr></thead>
-          <tbody id="marketBody"><tr><td class="muted" colspan="4">Loading…</td></tr></tbody>
-        </table>
 
-        <div style="margin-top:14px;">
-          <h3 style="margin:0 0 8px;">Learning Impact (Last 14 days)</h3>
-          <div class="muted">Accuracy trend by strategy — evaluates after the horizon, then updates weights.</div>
-          <canvas id="impactChart" height="140" style="margin-top:10px;"></canvas>
+        <div class="mt-4 overflow-hidden rounded-xl border border-white/10">
+          <table class="w-full text-sm">
+            <thead class="bg-white/5">
+              <tr>
+                <th class="text-left px-3 py-2 muted font-medium">Symbol</th>
+                <th class="text-right px-3 py-2 muted font-medium">Price</th>
+                <th class="text-right px-3 py-2 muted font-medium">Chg%</th>
+                <th class="text-right px-3 py-2 muted font-medium">Src</th>
+              </tr>
+            </thead>
+            <tbody id="pulseBody" class="divide-y divide-white/5">
+              <tr><td class="px-3 py-3 muted" colspan="4">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="mt-6 pt-6 border-t border-white/10">
+          <div class="text-lg font-semibold">Learning Impact (Last 14 days)</div>
+          <div class="muted text-sm mt-1">Accuracy trend by strategy — evaluates after the horizon, then updates weights.</div>
+          <div class="mt-4">
+            <canvas id="impactChart" height="170"></canvas>
+          </div>
+          <div id="learnEmpty" class="hidden mt-4 chip rounded-xl p-4">
+            <div class="font-semibold">No learning outcomes yet</div>
+            <div class="muted text-sm mt-1">
+              Learning samples appear immediately, but outcomes only appear after the evaluation horizon.
+              Switch to “Accelerated” learning mode to see results faster.
+            </div>
+          </div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Impact Modal -->
-  <div class="modalBack" id="impactModalBack">
-    <div class="modal">
-      <div class="head">
-        <h2 id="impactTitle">Impact</h2>
-        <button class="close" id="impactClose">Close</button>
-      </div>
-      <div class="impactGrid">
-        <div class="impactBox">
-          <div class="small" id="impactMeta">Horizon: — • Confidence: —</div>
-          <div class="impactList" id="impactTickers"></div>
+  <!-- Article Impact Modal -->
+  <div id="impactModal" class="fixed inset-0 hidden">
+    <div class="absolute inset-0 bg-black/60"></div>
+    <div class="absolute inset-0 flex items-center justify-center p-4">
+      <div class="glass w-full max-w-2xl rounded-2xl p-6">
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <div id="modalTitle" class="text-xl font-semibold leading-snug">—</div>
+            <div id="modalMeta" class="muted text-sm mt-1">—</div>
+          </div>
+          <button id="modalClose" class="btn px-4 py-2 rounded-xl text-sm font-medium">Close</button>
         </div>
-        <div class="impactBox">
-          <div style="font-weight:800;">Evidence</div>
-          <div class="small" style="margin-top:6px;">Why we believe this article moves these tickers.</div>
-          <ul id="impactEvidence" class="small" style="margin-top:10px; line-height:1.5;"></ul>
+
+        <div id="modalSummary" class="muted mt-4">—</div>
+
+        <div class="mt-5">
+          <div class="text-sm font-semibold">Impacted tickers</div>
+          <div id="modalTickers" class="mt-2 flex flex-wrap gap-2"></div>
+          <div id="modalWhy" class="muted text-sm mt-3">—</div>
+
+          <div class="mt-4 chip rounded-xl p-4">
+            <div class="text-sm font-semibold">Evidence (explainable)</div>
+            <div id="modalEvidence" class="muted text-sm mt-1">—</div>
+          </div>
+        </div>
+
+        <div class="mt-5 flex items-center justify-between">
+          <a id="modalLink" href="#" target="_blank" class="btn px-4 py-2 rounded-xl text-sm font-medium">
+            Open article ↗
+          </a>
+          <div id="modalConf" class="chip px-3 py-2 rounded-xl text-xs muted">—</div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- How it works Modal -->
-  <div class="modalBack" id="howBack">
-    <div class="modal">
-      <div class="head">
-        <h2>How This System Works</h2>
-        <button class="close" id="howClose">Close</button>
-      </div>
-      <div style="margin-top:10px;display:grid;gap:12px;">
-        <div class="impactBox">
-          <b>1) Observe</b>
-          <div class="small">Price movement + sentiment + general news signals are collected continuously.</div>
+  <!-- How it works modal -->
+  <div id="howModal" class="fixed inset-0 hidden">
+    <div class="absolute inset-0 bg-black/60"></div>
+    <div class="absolute inset-0 flex items-center justify-center p-4">
+      <div class="glass w-full max-w-3xl rounded-2xl p-6">
+        <div class="flex items-center justify-between gap-4">
+          <div class="text-xl font-semibold">How This System Works</div>
+          <button id="howClose" class="btn px-4 py-2 rounded-xl text-sm font-medium">Close</button>
         </div>
-        <div class="impactBox">
-          <b>2) Decide</b>
-          <div class="small">Four bots each create a BUY / SELL / HOLD decision with confidence and rationale.</div>
-        </div>
-        <div class="impactBox">
-          <b>3) Act or Simulate</b>
-          <div class="small">During market hours: real paper trades. When closed: analysis mode still logs learning.</div>
-        </div>
-        <div class="impactBox">
-          <b>4) Learn</b>
-          <div class="small">After a time horizon, decisions are graded WIN/LOSS and weights update. Learning persists across redeploys.</div>
-        </div>
-        <div class="impactBox">
-          <b>5) Repeat (Autonomous Engine)</b>
-          <div class="small">Runner rotates symbols every few seconds and emits events to the War Room in real time.</div>
-        </div>
-      </div>
-    </div>
-  </div>
 
-  <!-- Runner Modal -->
-  <div class="modalBack" id="runnerBack">
-    <div class="modal">
-      <div class="head">
-        <h2>Runner Status</h2>
-        <button class="close" id="runnerClose">Close</button>
+        <div class="muted text-sm mt-2">
+          A lightweight “observe → decide → act/simulate → learn → repeat” loop.
+          The key is that learning outcomes persist and influence future confidence.
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-5">
+          <div class="chip rounded-xl p-4">
+            <div class="font-semibold">1) Observe</div>
+            <div class="muted text-sm mt-1">Prices + % change + news sentiment are computed into features.</div>
+          </div>
+          <div class="chip rounded-xl p-4">
+            <div class="font-semibold">2) Decide</div>
+            <div class="muted text-sm mt-1">Each bot outputs BUY / SELL / HOLD with a confidence score.</div>
+          </div>
+          <div class="chip rounded-xl p-4">
+            <div class="font-semibold">3) Act or simulate</div>
+            <div class="muted text-sm mt-1">During market hours it trades; when closed it logs paper decisions.</div>
+          </div>
+          <div class="chip rounded-xl p-4">
+            <div class="font-semibold">4) Learn</div>
+            <div class="muted text-sm mt-1">After a horizon, outcomes are marked correct/incorrect and weights update.</div>
+          </div>
+        </div>
+
+        <div class="mt-5 chip rounded-xl p-4">
+          <div class="font-semibold text-sm">What you should watch</div>
+          <div class="muted text-sm mt-1">
+            If Learning Impact is empty, it means you have signals but not enough evaluated outcomes yet.
+            If General News is “mock”, you need to set a news provider key.
+          </div>
+        </div>
       </div>
-      <pre id="runnerJson" style="margin:12px 0 0;white-space:pre-wrap;color:var(--muted);background:rgba(0,0,0,.20);padding:12px;border:1px solid rgba(255,255,255,.10);border-radius:14px;"></pre>
     </div>
   </div>
 
 <script>
-  const $ = (id)=>document.getElementById(id);
+  const $ = (id) => document.getElementById(id);
 
-  async function getJSON(url, opts){
-    const r = await fetch(url, opts);
-    const t = await r.text();
-    let j;
-    try{ j = JSON.parse(t); } catch { j = { raw:t }; }
-    if(!r.ok) throw new Error(j.error || t || "Request failed");
-    return j;
+  function fmtPct(x){
+    const n = Number(x || 0);
+    const s = (Math.round(n * 1000) / 1000).toFixed(3);
+    return (n >= 0 ? "+" : "") + s;
+  }
+  function fmtPrice(x){
+    const n = Number(x || 0);
+    return n.toLocaleString(undefined, { maximumFractionDigits: 3 });
+  }
+  function timeAgo(iso){
+    if(!iso) return "";
+    const t = new Date(iso).getTime();
+    if(!Number.isFinite(t)) return "";
+    const d = Math.max(0, Date.now() - t);
+    const m = Math.floor(d/60000);
+    if(m < 1) return "just now";
+    if(m < 60) return m + "m ago";
+    const h = Math.floor(m/60);
+    if(h < 24) return h + "h ago";
+    const days = Math.floor(h/24);
+    return days + "d ago";
   }
 
-  function openModal(back){ back.style.display="flex"; }
-  function closeModal(back){ back.style.display="none"; }
-
-  // WS status
   function connectWS(){
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws`);
-    ws.onopen = ()=> $("wsPill").textContent = "WS: live ✅";
-    ws.onclose = ()=> $("wsPill").textContent = "WS: closed ⚠️";
-    ws.onerror = ()=> $("wsPill").textContent = "WS: error ⚠️";
+    const url = proto + "://" + location.host + "/ws";
+    const ws = new WebSocket(url);
+
+    ws.onopen = () => {
+      $("wsChip").innerHTML = 'WS: <span class="text-emerald-300">live ✅</span>';
+    };
+    ws.onclose = () => {
+      $("wsChip").innerHTML = 'WS: <span class="text-amber-300">closed ⚠️</span>';
+      setTimeout(connectWS, 1500);
+    };
+    ws.onerror = () => {};
+    ws.onmessage = () => {};
   }
 
-  // General news
-  function renderGeneralNews(pack){
-    $("newsProvider").textContent = `Provider: ${pack.provider || "—"}`;
-    const items = pack.items || [];
-    const box = $("generalNews");
-    if(!items.length){
-      box.innerHTML = `<div class="newsItem"><div class="t">No general news available</div><div class="m">Provider returned zero articles.</div></div>`;
-      return;
-    }
-    box.innerHTML = items.slice(0,8).map((a,i)=>`
-      <div class="newsItem" data-idx="${i}">
-        <div class="t">${escapeHtml(a.title || "Untitled")}</div>
-        <div class="m">${escapeHtml((a.summary||"").slice(0,160))}</div>
-        <div class="small" style="margin-top:8px;">${escapeHtml(a.source||"")} • ${new Date(a.publishedAt||Date.now()).toLocaleString()}</div>
-      </div>
-    `).join("");
+  let lastGeneralNews = [];
 
-    box.querySelectorAll(".newsItem").forEach(el=>{
-      el.addEventListener("click", async ()=>{
-        const idx = Number(el.getAttribute("data-idx"));
-        const a = items[idx];
-        await openImpact(a);
-      });
-    });
-  }
+  async function loadGeneralNews(){
+    try{
+      const r = await fetch("/api/news/general?limit=8");
+      const j = await r.json();
 
-  function escapeHtml(s){
-    return String(s||"")
-      .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
-      .replaceAll('"',"&quot;").replaceAll("'","&#039;");
-  }
+      $("newsProvider").textContent = "Provider: " + (j.provider || "—");
+      lastGeneralNews = Array.isArray(j.items) ? j.items : [];
 
-  async function openImpact(article){
-    $("impactTitle").textContent = article.title || "Impact";
-    $("impactMeta").textContent = "Thinking…";
-    $("impactTickers").innerHTML = `<div class="small">Analyzing…</div>`;
-    $("impactEvidence").innerHTML = "";
-    openModal($("impactModalBack"));
+      if(!lastGeneralNews.length){
+        $("newsList").innerHTML = "";
+        $("newsEmpty").classList.remove("hidden");
+        return;
+      }
 
-    const out = await getJSON("/api/news/impact", {
-      method:"POST",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({ title: article.title||"", summary: article.summary||"" })
-    });
+      $("newsEmpty").classList.add("hidden");
 
-    $("impactMeta").textContent = `Horizon: ${out.horizon || "short"} • Confidence: ${out.confidence ?? "—"}/100 • Mode: ${out.mode || "—"}`;
+      $("newsList").innerHTML = lastGeneralNews.map((a, idx) => {
+        const imp = a.impact || {};
+        const tickers = (imp.tickers || []).slice(0, 6);
+        const chips = tickers.map(t => `<span class="chip px-2 py-1 rounded-lg text-xs">${t}</span>`).join("");
+        const published = a.publishedAt ? timeAgo(a.publishedAt) : "";
 
-    const impacted = out.impacted || [];
-    if(!impacted.length){
-      $("impactTickers").innerHTML = `<div class="small">No clear impacted tickers detected.</div>`;
-    } else {
-      $("impactTickers").innerHTML = impacted.map(x=>{
-        const c = Math.max(0, Math.min(100, Number(x.confidence||0)));
         return `
-          <div class="impRow">
-            <div style="min-width:72px;font-weight:900;">${escapeHtml(x.ticker)}</div>
-            <div class="bar"><div style="width:${c}%"></div></div>
-            <div style="min-width:48px;text-align:right" class="small">${c}%</div>
-          </div>
-          <div class="small" style="margin:0 0 6px 82px;">${escapeHtml(x.rationale || "")}</div>
+          <button class="w-full text-left chip rounded-xl p-4 row" data-idx="${idx}">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="font-semibold leading-snug">${escapeHtml(a.title || "")}</div>
+                <div class="muted text-xs mt-1">${escapeHtml(a.source || "—")} • ${escapeHtml(published)}</div>
+              </div>
+              <div class="shrink-0 muted text-xs">${imp.horizon ? ("Horizon: " + imp.horizon) : ""}</div>
+            </div>
+            <div class="mt-3 flex flex-wrap gap-2">${chips || `<span class="muted text-sm">No impacted tickers inferred</span>`}</div>
+          </button>
         `;
       }).join("");
-    }
 
-    const ev = out.evidence || [];
-    $("impactEvidence").innerHTML = ev.map(x=>`<li>${escapeHtml(x)}</li>`).join("");
+      [...$("newsList").querySelectorAll("button[data-idx]")].forEach(btn => {
+        btn.addEventListener("click", () => openImpactModal(Number(btn.dataset.idx)));
+      });
+
+    }catch(e){
+      $("newsProvider").textContent = "Provider: error";
+      $("newsList").innerHTML = `<div class="chip rounded-xl p-4"><div class="font-semibold">News failed to load</div><div class="muted text-sm mt-1">${escapeHtml(String(e.message || e))}</div></div>`;
+    }
   }
 
-  // Market pulse
-  async function loadMarket(){
-    const m = await getJSON("/api/market-overview");
-    const body = $("marketBody");
-    if(!Array.isArray(m) || !m.length){
-      body.innerHTML = `<tr><td class="muted" colspan="4">No market data</td></tr>`;
-      return;
-    }
-    body.innerHTML = m.map(r=>{
-      const ch = Number(r.changePercent||0);
-      const chTxt = (ch>=0?"+":"") + ch.toFixed(2);
-      return `<tr>
-        <td><b>${r.symbol}</b></td>
-        <td>$${Number(r.price||0).toFixed(2)}</td>
-        <td>${chTxt}%</td>
-        <td class="muted">${r.provider||"—"}</td>
-      </tr>`;
-    }).join("");
+  function openImpactModal(idx){
+    const a = lastGeneralNews[idx];
+    if(!a) return;
+
+    const imp = a.impact || {};
+    $("modalTitle").textContent = a.title || "—";
+    $("modalMeta").textContent = `${a.source || "—"} • ${a.publishedAt ? timeAgo(a.publishedAt) : ""}`;
+    $("modalSummary").textContent = a.summary || "—";
+    $("modalWhy").textContent = imp.why || "—";
+    $("modalEvidence").textContent = (imp.ruleHits && imp.ruleHits.length)
+      ? `Matched impact routes: ${imp.ruleHits.join(", ")}`
+      : "Heuristic mapping (no explicit rule hits).";
+    $("modalConf").textContent = `Confidence: ${imp.confidence ?? "—"} • Horizon: ${imp.horizon ?? "—"}`;
+    $("modalLink").href = a.url || "#";
+
+    const tickers = (imp.tickers || []);
+    $("modalTickers").innerHTML = tickers.length
+      ? tickers.map(t => `<a class="chip px-3 py-1.5 rounded-xl text-sm hover:bg-white/10" href="/war-room.html#${t}">${t}</a>`).join("")
+      : `<span class="muted text-sm">No impacted tickers inferred for this headline.</span>`;
+
+    $("impactModal").classList.remove("hidden");
   }
 
-  // Learning impact chart
-  let impactChart = null;
-  async function loadImpact(){
-    const out = await getJSON("/api/learning/impact?days=14");
-    const ctx = $("impactChart").getContext("2d");
+  function closeImpactModal(){
+    $("impactModal").classList.add("hidden");
+  }
 
-    const seriesBy = out.byStrategy || {};
-    const labelsSet = new Set();
-    Object.values(seriesBy).forEach(arr => (arr||[]).forEach(p => labelsSet.add(p.day)));
-    const labels = Array.from(labelsSet).sort();
+  async function loadMarketPulse(){
+    try{
+      const r = await fetch("/api/market/pulse");
+      const j = await r.json();
 
-    const datasets = Object.keys(seriesBy).map((k)=>{
-      const map = new Map((seriesBy[k]||[]).map(p=>[p.day, p.accuracy]));
-      return {
-        label: k,
-        data: labels.map(d => map.get(d) ?? null),
-        tension: 0.35,
-        spanGaps: true,
-      };
-    });
+      const m = j.market || {};
+      $("marketChip").textContent = `Market: ${m.open ? "OPEN" : "CLOSED"} (${m.reason || ""})`;
 
-    if(impactChart) impactChart.destroy();
-    impactChart = new Chart(ctx, {
-      type:"line",
-      data:{ labels, datasets },
-      options:{
-        responsive:true,
-        plugins:{ legend:{ labels:{ color:"rgba(255,255,255,.7)" } } },
-        scales:{
-          x:{ ticks:{ color:"rgba(255,255,255,.55)" }, grid:{ color:"rgba(255,255,255,.07)" } },
-          y:{ ticks:{ color:"rgba(255,255,255,.55)" }, grid:{ color:"rgba(255,255,255,.07)" }, suggestedMin:0, suggestedMax:100 }
-        }
+      const items = Array.isArray(j.items) ? j.items : [];
+      if(!items.length){
+        $("pulseBody").innerHTML = `<tr><td class="px-3 py-3 muted" colspan="4">No symbols returned</td></tr>`;
+        return;
       }
-    });
+
+      $("pulseBody").innerHTML = items.map(x => `
+        <tr class="row">
+          <td class="px-3 py-2 font-medium">${escapeHtml(x.symbol || "")}</td>
+          <td class="px-3 py-2 text-right">${fmtPrice(x.price)}</td>
+          <td class="px-3 py-2 text-right muted">${fmtPct(x.changePercent)}%</td>
+          <td class="px-3 py-2 text-right muted">${escapeHtml(x.provider || "—")}</td>
+        </tr>
+      `).join("");
+
+    }catch(e){
+      $("pulseBody").innerHTML = `<tr><td class="px-3 py-3 muted" colspan="4">Pulse failed: ${escapeHtml(String(e.message || e))}</td></tr>`;
+    }
+  }
+
+  let impactChart = null;
+
+  async function loadLearningImpact(){
+    try{
+      const r = await fetch("/api/learning/impact?days=14");
+      const j = await r.json();
+
+      const series = Array.isArray(j.series) ? j.series : [];
+      if(!series.length){
+        $("learnEmpty").classList.remove("hidden");
+        if(impactChart){ impactChart.destroy(); impactChart = null; }
+        return;
+      }
+      $("learnEmpty").classList.add("hidden");
+
+      const days = Array.from(new Set(series.flatMap(s => s.points.map(p => p.day)))).sort();
+
+      const datasets = series.map(s => {
+        const byDay = Object.fromEntries(s.points.map(p => [p.day, p.accuracy]));
+        const data = days.map(d => (d in byDay ? byDay[d] : null));
+        return {
+          label: s.strategy,
+          data,
+          spanGaps: true,
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.25
+        };
+      });
+
+      const ctx = $("impactChart").getContext("2d");
+      if(impactChart) impactChart.destroy();
+
+      impactChart = new Chart(ctx, {
+        type: "line",
+        data: { labels: days, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { labels: { color: "rgba(231,233,255,0.75)" } },
+            tooltip: { enabled: true }
+          },
+          scales: {
+            x: { ticks: { color: "rgba(231,233,255,0.55)" }, grid: { color: "rgba(255,255,255,0.06)" } },
+            y: { ticks: { color: "rgba(231,233,255,0.55)" }, grid: { color: "rgba(255,255,255,0.06)" }, suggestedMin: 0, suggestedMax: 100 }
+          }
+        }
+      });
+
+    }catch(e){
+      $("learnEmpty").classList.remove("hidden");
+    }
   }
 
   async function loadHealth(){
-    const h = await getJSON("/api/health");
-    $("apiPill").textContent = `API: ${JSON.stringify(h.apis || {})}`;
-    $("marketTag").textContent = `Market: ${h.market?.open ? "OPEN" : "CLOSED"} (${h.market?.reason || ""})`;
-  }
-
-  async function loadGeneralNews(){
-    const pack = await getJSON("/api/news/general?limit=8");
-    renderGeneralNews(pack);
-  }
-
-  // Buttons
-  $("impactClose").onclick = ()=> closeModal($("impactModalBack"));
-  $("howBtn").onclick = ()=> openModal($("howBack"));
-  $("howClose").onclick = ()=> closeModal($("howBack"));
-
-  $("runnerBtn").onclick = async ()=>{
-    openModal($("runnerBack"));
-    $("runnerJson").textContent = "Loading…";
     try{
-      const r = await getJSON("/api/runner/status");
-      $("runnerJson").textContent = JSON.stringify(r, null, 2);
-    } catch(e){
-      $("runnerJson").textContent = String(e.message||e);
+      const r = await fetch("/api/health");
+      const j = await r.json();
+      $("apiChip").textContent = "API: " + JSON.stringify({ postgres: !!j.postgres });
+    }catch{
+      $("apiChip").textContent = "API: error";
     }
-  };
-  $("runnerClose").onclick = ()=> closeModal($("runnerBack"));
+  }
 
-  // Boot (live-by-default)
-  (async function boot(){
-    connectWS();
-    await Promise.allSettled([loadHealth(), loadMarket(), loadImpact(), loadGeneralNews()]);
-  })();
+  $("howBtn").addEventListener("click", () => $("howModal").classList.remove("hidden"));
+  $("howClose").addEventListener("click", () => $("howModal").classList.add("hidden"));
+  $("modalClose").addEventListener("click", closeImpactModal);
+  $("impactModal").addEventListener("click", (e) => { if(e.target === $("impactModal").children[0]) closeImpactModal(); });
+  $("howModal").addEventListener("click", (e) => { if(e.target === $("howModal").children[0]) $("howModal").classList.add("hidden"); });
+
+  function escapeHtml(str){
+    return String(str || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  connectWS();
+  loadHealth();
+  loadGeneralNews();
+  loadMarketPulse();
+  loadLearningImpact();
+
+  setInterval(loadGeneralNews, 90_000);
+  setInterval(loadMarketPulse, 25_000);
+  setInterval(loadLearningImpact, 60_000);
 </script>
 </body>
 </html>
