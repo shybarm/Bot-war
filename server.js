@@ -106,6 +106,44 @@ async function getStockPrice(symbol) {
       }
     } catch {}
   }
+// --- SAFE TRADE PERSISTENCE (guarantees non-null strategy) ---
+async function recordTrade({
+  bot,                // e.g. 'day_trade' | 'market_swing' | 'sp500_long' | 'news_only'
+  strategy,           // same as bot; if missing, we coalesce to bot
+  symbol,             // e.g. 'TSLA'
+  side,               // 'BUY' | 'SELL' | 'HOLD'
+  qty = 0,
+  price = 0,
+  rationale = '',
+  confidence = 50,
+  horizon = 'medium',
+  features = {}
+}) {
+  const s = strategy ?? bot ?? 'unknown';
+  const b = bot ?? s;
+
+  // IMPORTANT: never pass NULL for strategy, bot, rationale, etc.
+  await dbQuery(
+    `
+    INSERT INTO trades
+      (ts, bot, strategy, symbol, side, qty, price, rationale, confidence, horizon, features)
+    VALUES
+      (NOW(), $1,  $2,       $3,    $4,   $5,  $6,    $7,        $8,         $9,      $10)
+    `,
+    [
+      b,
+      s,
+      symbol,
+      side,
+      Number(qty) || 0,
+      Number(price) || 0,
+      String(rationale || ''),
+      Number(confidence) || 50,
+      String(horizon || 'medium'),
+      JSON.stringify(features || {})
+    ]
+  );
+}
 
   if (TWELVEDATA_KEY) {
     try {
