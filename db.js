@@ -23,78 +23,6 @@ export async function dbQuery(sql, params = []) {
   return pool.query(sql, params);
 }
 
-async function migrateLegacyTradesSchema() {
-  // This upgrades older deployments where trades table existed but missing columns.
-  // It is SAFE to run on every boot.
-  await dbQuery(`
-    DO $$
-    BEGIN
-      -- Ensure trades table exists (older deploys may have created a partial schema)
-      IF NOT EXISTS (
-        SELECT 1 FROM information_schema.tables
-        WHERE table_schema='public' AND table_name='trades'
-      ) THEN
-        CREATE TABLE trades (
-          id BIGSERIAL PRIMARY KEY,
-          ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          bot TEXT NOT NULL,
-          symbol TEXT NOT NULL,
-          side TEXT NOT NULL CHECK (side IN ('BUY','SELL','HOLD')),
-          qty NUMERIC NOT NULL DEFAULT 0,
-          price NUMERIC NOT NULL DEFAULT 0,
-          rationale TEXT NOT NULL DEFAULT '',
-          confidence INT NOT NULL DEFAULT 50,
-          horizon TEXT NOT NULL DEFAULT 'medium'
-        );
-      END IF;
-
-      -- Add ts if missing
-      IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema='public' AND table_name='trades' AND column_name='ts'
-      ) THEN
-        ALTER TABLE trades ADD COLUMN ts TIMESTAMPTZ NOT NULL DEFAULT NOW();
-      END IF;
-
-      -- Add bot if missing
-      IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema='public' AND table_name='trades' AND column_name='bot'
-      ) THEN
-        ALTER TABLE trades ADD COLUMN bot TEXT;
-      END IF;
-
-      -- Backfill bot from strategy if that legacy column exists
-      IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema='public' AND table_name='trades' AND column_name='strategy'
-      ) THEN
-        UPDATE trades SET bot = strategy WHERE bot IS NULL;
-      END IF;
-
-      -- If still null, set to 'unknown' so we can enforce NOT NULL safely
-      UPDATE trades SET bot = 'unknown' WHERE bot IS NULL;
-
-      -- Ensure NOT NULL (only after backfill)
-      BEGIN
-        ALTER TABLE trades ALTER COLUMN bot SET NOT NULL;
-      EXCEPTION WHEN others THEN
-        -- If there are still unexpected nulls, don't crash boot; runner will still work via 'unknown' backfill above.
-        NULL;
-      END;
-
-      -- Add features if missing
-      IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema='public' AND table_name='trades' AND column_name='features'
-      ) THEN
-        ALTER TABLE trades ADD COLUMN features JSONB NOT NULL DEFAULT '{}'::jsonb;
-      END IF;
-
-    END $$;
-  `);
-}
-
 export async function dbInit() {
   if (!hasDb) return;
 
@@ -151,8 +79,28 @@ export async function dbInit() {
     );
   `);
 
-  // Always-on migrations for older installs
-  await migrateLegacyTradesSchema();
+  // --- Safe schema migrations for legacy deploys (idempotent) ---
+  // Older deployments may have a `trades` table missing newer columns.
+  await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS ts TIMESTAMPTZ NOT NULL DEFAULT NOW();`);
+  await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS bot TEXT;`);
+  await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale TEXT NOT NULL DEFAULT '';`);
+  await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS confidence INT NOT NULL DEFAULT 50;`);
+  await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS horizon TEXT NOT NULL DEFAULT 'medium';`);
+  await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS features JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+
+  // Backfill / harden bot column (keep non-breaking: never delete data)
+  await dbQuery(`UPDATE trades SET bot = COALESCE(bot, 'unknown') WHERE bot IS NULL;`);
+  // Setting NOT NULL can fail on some legacy edge-cases; protect boot so deploys never crash.
+  await dbQuery(`
+    DO $$
+    BEGIN
+      BEGIN
+        ALTER TABLE trades ALTER COLUMN bot SET NOT NULL;
+      EXCEPTION WHEN others THEN
+        NULL;
+      END;
+    END $$;
+  `);
 
   await dbQuery(`
     CREATE TABLE IF NOT EXISTS learning_samples (
