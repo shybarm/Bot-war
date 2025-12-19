@@ -49,8 +49,8 @@ const NEWS_ONLY_WHEN_CLOSED =
 const RUNNER_ENABLED =
   (process.env.RUNNER_ENABLED || "true").toLowerCase() === "true";
 const RUNNER_INTERVAL_SEC = Number(process.env.RUNNER_INTERVAL_SEC || 5);
-const RUNNER_SCAN_BATCH = Number(process.env.RUNNER_SCAN_BATCH || 1);
-const RUNNER_TRADE_TOP = Number(process.env.RUNNER_TRADE_TOP || 1);
+const RUNNER_SCAN_BATCH = Number(process.env.RUNNER_SCAN_BATCH || 40);
+const RUNNER_TRADE_TOP = Number(process.env.RUNNER_TRADE_TOP || 3);
 const RUNNER_LOCK_ID = process.env.RUNNER_LOCK_ID || "default-lock";
 
 // AUTO_SYMBOLS (your Railway var)
@@ -74,40 +74,6 @@ async function safeJson(res) {
   } catch {
     return { ok: false, json: null };
   }
-}
-
-function sentimentScore(text) {
-  const t = (text || "").toLowerCase();
-  const pos = [
-    "surge",
-    "beats",
-    "profit",
-    "upgrade",
-    "strong",
-    "record",
-    "growth",
-    "bullish",
-    "rally",
-    "wins",
-    "approval",
-  ];
-  const neg = [
-    "miss",
-    "drop",
-    "downgrade",
-    "weak",
-    "lawsuit",
-    "probe",
-    "bearish",
-    "decline",
-    "fall",
-    "ban",
-    "recall",
-  ];
-  let score = 0;
-  for (const w of pos) if (t.includes(w)) score += 0.12;
-  for (const w of neg) if (t.includes(w)) score -= 0.12;
-  return Math.max(-1, Math.min(1, score));
 }
 
 function getNowInTZ(tz) {
@@ -146,6 +112,40 @@ function isValidTicker(raw) {
   if (!/^[A-Z.\-]{1,10}$/.test(s))
     return { ok: false, reason: "Invalid ticker format" };
   return { ok: true, symbol: s };
+}
+
+function sentimentScore(text) {
+  const t = (text || "").toLowerCase();
+  const pos = [
+    "surge",
+    "beats",
+    "profit",
+    "upgrade",
+    "strong",
+    "record",
+    "growth",
+    "bullish",
+    "rally",
+    "wins",
+    "approval",
+  ];
+  const neg = [
+    "miss",
+    "drop",
+    "downgrade",
+    "weak",
+    "lawsuit",
+    "probe",
+    "bearish",
+    "decline",
+    "fall",
+    "ban",
+    "recall",
+  ];
+  let score = 0;
+  for (const w of pos) if (t.includes(w)) score += 0.12;
+  for (const w of neg) if (t.includes(w)) score -= 0.12;
+  return Math.max(-1, Math.min(1, score));
 }
 
 // -----------------------------
@@ -260,17 +260,250 @@ async function getNews(symbol, limit = 8) {
     url: "#",
     source: "mock",
     publishedAt: new Date().toISOString(),
-    summary: `Configure NEWS_API_KEY or NEWSAPI_BACKUP_KEY to enable real news. (mock)`,
+    summary: "No provider available",
   }));
   return { provider: "mock", items };
+}
+
+// -----------------------------
+// General (non-finance) news feed -> impacted tickers (Arena v2)
+// -----------------------------
+const FINANCEY_NEWS_TERMS = [
+  "stock",
+  "stocks",
+  "shares",
+  "earnings",
+  "nasdaq",
+  "nyse",
+  "dow",
+  "s&p",
+  "sp500",
+  "analyst",
+  "price target",
+  "upgrade",
+  "downgrade",
+  "quarter",
+  "q1",
+  "q2",
+  "q3",
+  "q4",
+  "dividend",
+  "guidance",
+  "ipo",
+  "sec filing",
+  "10-k",
+  "10-q",
+];
+
+function looksTooFinancey(article) {
+  const hay = `${article?.title || ""} ${article?.summary || ""}`.toLowerCase();
+  return FINANCEY_NEWS_TERMS.some((w) => hay.includes(w));
+}
+
+async function getGeneralNews(limit = 8) {
+  // Broad, real-world “macro” query. Goal: non-finance news that still moves markets.
+  const query =
+    "(inflation OR rates OR fed OR oil OR opec OR war OR sanctions OR regulation OR ai OR chips OR supply chain OR shipping OR election OR cybersecurity OR climate)";
+
+  // NewsData: q=...
+  if (NEWSDATA_KEY) {
+    try {
+      const r = await fetch(
+        `https://newsdata.io/api/1/news?apikey=${encodeURIComponent(
+          NEWSDATA_KEY
+        )}&q=${encodeURIComponent(query)}&language=en`,
+        { timeout: 15000 }
+      );
+      const parsed = await safeJson(r);
+      if (parsed.ok && Array.isArray(parsed.json?.results)) {
+        const items = parsed.json.results
+          .map((a) => ({
+            title: a.title || "",
+            url: a.link || "",
+            source: a.source_id || "newsdata",
+            publishedAt: a.pubDate || "",
+            summary: a.description || "",
+          }))
+          .filter((a) => a.title)
+          .filter((a) => !looksTooFinancey(a))
+          .slice(0, limit);
+        return { provider: "newsdata", items };
+      }
+    } catch {}
+  }
+
+  // NewsAPI: q=...
+  if (NEWSAPI_KEY) {
+    try {
+      const r = await fetch(
+        `https://newsapi.org/v2/everything?q=${encodeURIComponent(
+          query
+        )}&language=en&pageSize=${Math.min(limit * 2, 20)}&sortBy=publishedAt`,
+        { timeout: 15000, headers: { "X-Api-Key": NEWSAPI_KEY } }
+      );
+      const parsed = await safeJson(r);
+      if (parsed.ok && Array.isArray(parsed.json?.articles)) {
+        const items = parsed.json.articles
+          .map((a) => ({
+            title: a.title || "",
+            url: a.url || "",
+            source: a.source?.name || "newsapi",
+            publishedAt: a.publishedAt || "",
+            summary: a.description || "",
+          }))
+          .filter((a) => a.title)
+          .filter((a) => !looksTooFinancey(a))
+          .slice(0, limit);
+        return { provider: "newsapi", items };
+      }
+    } catch {}
+  }
+
+  // Mock fallback (never empty)
+  const items = Array.from({ length: Math.min(limit, 8) }).map((_, i) => ({
+    title: `General news placeholder #${i + 1} (configure NEWS keys for real headlines)`,
+    url: "#",
+    source: "mock",
+    publishedAt: new Date().toISOString(),
+    summary: "Add NEWS_API_KEY or NEWSAPI_BACKUP_KEY in Railway to fetch real headlines.",
+  }));
+  return { provider: "mock", items };
+}
+
+// Simple “impact router”: keywords -> a small set of tickers the average user recognizes.
+// This is intentionally non-technical and explainable; OpenAI can later upgrade it.
+const IMPACT_RULES = [
+  {
+    name: "Oil & Energy",
+    terms: ["oil", "crude", "opec", "brent", "gas", "pipeline", "refinery"],
+    tickers: ["XOM", "CVX", "COP"],
+    horizon: "short",
+  },
+  {
+    name: "Rates & Inflation",
+    terms: [
+      "inflation",
+      "rates",
+      "fed",
+      "powell",
+      "cpi",
+      "ppi",
+      "jobs report",
+      "unemployment",
+    ],
+    tickers: ["JPM", "BAC", "GS", "V"],
+    horizon: "medium",
+  },
+  {
+    name: "Chips & AI",
+    terms: ["chip", "chips", "semiconductor", "gpu", "ai", "nvidia", "amd", "tsmc"],
+    tickers: ["NVDA", "AMD", "MSFT", "GOOGL"],
+    horizon: "short",
+  },
+  {
+    name: "Cybersecurity",
+    terms: ["hack", "breach", "cyber", "ransomware", "outage"],
+    tickers: ["MSFT", "AMZN", "GOOGL"],
+    horizon: "short",
+  },
+  {
+    name: "Shipping & Supply Chain",
+    terms: ["shipping", "supply chain", "port", "freight", "strike", "container"],
+    tickers: ["WMT", "AMZN", "AAPL"],
+    horizon: "medium",
+  },
+  {
+    name: "Regulation & Antitrust",
+    terms: ["regulation", "antitrust", "ban", "lawsuit", "doj", "eu"],
+    tickers: ["META", "GOOGL", "AAPL", "MSFT"],
+    horizon: "medium",
+  },
+  {
+    name: "Geopolitics",
+    terms: [
+      "war",
+      "sanctions",
+      "missile",
+      "conflict",
+      "attack",
+      "ukraine",
+      "israel",
+      "iran",
+      "china",
+      "taiwan",
+    ],
+    tickers: ["XOM", "LMT", "RTX", "NVDA"],
+    horizon: "short",
+  },
+  {
+    name: "Consumer + Retail",
+    terms: ["consumer", "spending", "prices", "boycott", "retail", "food", "shortage"],
+    tickers: ["WMT", "COST", "KO"],
+    horizon: "medium",
+  },
+];
+
+function inferImpactedTickers(article) {
+  const text = `${article?.title || ""} ${article?.summary || ""}`.toLowerCase();
+  const hits = [];
+
+  for (const rule of IMPACT_RULES) {
+    if (rule.terms.some((t) => text.includes(t))) hits.push(rule);
+  }
+
+  const tickers = Array.from(new Set(hits.flatMap((h) => h.tickers))).slice(0, 8);
+
+  let why = "Broader market relevance detected.";
+  let horizon = "short";
+  let confidence = 55;
+
+  if (hits.length) {
+    const top = hits[0];
+    why = `${top.name} headline: likely impacts the related sector basket.`;
+    horizon = top.horizon;
+    confidence = Math.min(85, 60 + hits.length * 8);
+  } else {
+    const mega = ["apple", "microsoft", "google", "amazon", "meta", "tesla", "nvidia"];
+    if (mega.some((m) => text.includes(m))) {
+      why = "Major mega-cap brand mentioned: tends to ripple into related tickers.";
+      horizon = "short";
+      confidence = 62;
+    }
+  }
+
+  return {
+    tickers,
+    why,
+    horizon,
+    confidence,
+    ruleHits: hits.map((h) => h.name),
+  };
 }
 
 // -----------------------------
 // Universe + carousel symbols
 // -----------------------------
 const SP500_MINI = [
-  "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","AMD","NFLX","INTC",
-  "JPM","V","MA","UNH","XOM","COST","WMT","AVGO","LLY","KO"
+  "AAPL",
+  "MSFT",
+  "NVDA",
+  "AMZN",
+  "GOOGL",
+  "META",
+  "TSLA",
+  "AMD",
+  "NFLX",
+  "INTC",
+  "JPM",
+  "V",
+  "MA",
+  "UNH",
+  "XOM",
+  "COST",
+  "WMT",
+  "AVGO",
+  "LLY",
+  "KO",
 ];
 
 async function getUniverse() {
@@ -306,30 +539,43 @@ const BOTS = [
   { strategy: "news_only", label: "News-Only", horizon: "short" },
 ];
 
-function baseDecision(bot, features) {
+function baseDecision(strategy, features) {
   const { avgSent, changePercent } = features;
 
-  if (bot === "sp500_long") {
-    if (changePercent < -1.25) return { signal: "BUY", confidence: 64, why: "Long-bias: buying dip on quality" };
-    if (changePercent > 2.0) return { signal: "SELL", confidence: 56, why: "Long-bias: trimming strength" };
+  if (strategy === "sp500_long") {
+    if (changePercent < -1.25)
+      return { signal: "BUY", confidence: 64, why: "Long-bias: buying dip on quality" };
+    if (changePercent > 2.0)
+      return { signal: "SELL", confidence: 56, why: "Long-bias: trimming strength" };
     return { signal: "HOLD", confidence: 54, why: "No long-term edge detected" };
   }
-  if (bot === "market_swing") {
-    if (changePercent < -0.9) return { signal: "BUY", confidence: 61, why: "Swing: mean reversion dip buy" };
+
+  if (strategy === "market_swing") {
+    if (changePercent < -0.9)
+      return { signal: "BUY", confidence: 61, why: "Swing: mean reversion dip buy" };
     if (changePercent > 1.2) return { signal: "SELL", confidence: 60, why: "Swing: sell rally" };
     return { signal: "HOLD", confidence: 53, why: "No swing setup" };
   }
-  if (bot === "day_trade") {
+
+  if (strategy === "day_trade") {
     if (Math.abs(changePercent) > 0.8) {
-      return { signal: changePercent < 0 ? "BUY" : "SELL", confidence: 57, why: "Short-term volatility reaction" };
+      return {
+        signal: changePercent < 0 ? "BUY" : "SELL",
+        confidence: 57,
+        why: "Short-term volatility reaction",
+      };
     }
     return { signal: "HOLD", confidence: 53, why: "Range noise" };
   }
-  if (bot === "news_only") {
-    if (avgSent > 0.18) return { signal: "BUY", confidence: 66, why: "Trades strictly on positive news cluster" };
-    if (avgSent < -0.18) return { signal: "SELL", confidence: 66, why: "Trades strictly on negative news cluster" };
+
+  if (strategy === "news_only") {
+    if (avgSent > 0.18)
+      return { signal: "BUY", confidence: 66, why: "Trades strictly on positive news cluster" };
+    if (avgSent < -0.18)
+      return { signal: "SELL", confidence: 66, why: "Trades strictly on negative news cluster" };
     return { signal: "HOLD", confidence: 55, why: "News signal not strong enough" };
   }
+
   return { signal: "HOLD", confidence: 50, why: "Default" };
 }
 
@@ -367,8 +613,19 @@ async function applyLearningAdjust(strategy, base, features) {
   return { ...base, signal, confidence, learnedP: p };
 }
 
-// ✅ FIX: always insert BOTH bot + strategy (never NULL)
-async function recordTrade({ bot, strategy, symbol, side, qty, price, rationale, confidence, horizon, features }) {
+// ✅ Always insert BOTH bot + strategy (never NULL)
+async function recordTrade({
+  bot,
+  strategy,
+  symbol,
+  side,
+  qty,
+  price,
+  rationale,
+  confidence,
+  horizon,
+  features,
+}) {
   if (!hasDb) return null;
 
   const b = bot ?? strategy ?? "unknown";
@@ -393,6 +650,7 @@ async function recordTrade({ bot, strategy, symbol, side, qty, price, rationale,
       JSON.stringify(features || {}),
     ]
   );
+
   return r.rows[0];
 }
 
@@ -404,10 +662,10 @@ async function applyTradeToPortfolio({ bot, symbol, side, qty, price }) {
 
   let cash = Number(pr.rows[0].cash);
 
-  const pos = await dbQuery(
-    `SELECT qty, avg_price FROM positions WHERE bot=$1 AND symbol=$2`,
-    [bot, symbol]
-  );
+  const pos = await dbQuery(`SELECT qty, avg_price FROM positions WHERE bot=$1 AND symbol=$2`, [
+    bot,
+    symbol,
+  ]);
 
   let curQty = pos.rows[0] ? Number(pos.rows[0].qty) : 0;
   let avgPrice = pos.rows[0] ? Number(pos.rows[0].avg_price) : 0;
@@ -443,21 +701,45 @@ async function applyTradeToPortfolio({ bot, symbol, side, qty, price }) {
   );
 }
 
-async function logLearningSample({ bot, strategy, symbol, signal, horizon, priceAtSignal, features, rationale, confidence, evalAfterSec }) {
+async function logLearningSample({
+  bot,
+  strategy,
+  symbol,
+  signal,
+  horizon,
+  priceAtSignal,
+  features,
+  rationale,
+  confidence,
+  evalAfterSec,
+}) {
   if (!hasDb) return null;
+
   const r = await dbQuery(
     `
     INSERT INTO learning_samples(bot, strategy, symbol, signal, horizon, price_at_signal, features, rationale, confidence, eval_after_sec)
     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10)
     RETURNING id
   `,
-    [bot, strategy, symbol, signal, horizon, priceAtSignal, JSON.stringify(features || {}), rationale || "", confidence || 50, evalAfterSec]
+    [
+      bot,
+      strategy,
+      symbol,
+      signal,
+      horizon,
+      priceAtSignal,
+      JSON.stringify(features || {}),
+      rationale || "",
+      confidence || 50,
+      evalAfterSec,
+    ]
   );
   return r.rows[0]?.id ?? null;
 }
 
 async function updateModelFromOutcome(strategy, features, correctBool) {
   if (!hasDb) return;
+
   const y = correctBool ? 1 : 0;
 
   const w = await getWeights(strategy);
@@ -468,7 +750,7 @@ async function updateModelFromOutcome(strategy, features, correctBool) {
   const s = Number(features.avgSent || 0);
   const c = Number(features.changePercent || 0) / 2.0;
 
-  const grad = (y - p);
+  const grad = y - p;
 
   const newBias = Number(w.bias || 0) + lr * grad * 1.0;
   const newWS = Number(w.avgSent || 0) + lr * grad * s;
@@ -496,7 +778,9 @@ const clients = new Set();
 function broadcast(obj) {
   const msg = JSON.stringify(obj);
   for (const c of clients) {
-    try { c.send(msg); } catch {}
+    try {
+      c.send(msg);
+    } catch {}
   }
 }
 
@@ -570,8 +854,8 @@ app.get("/api/runner/status", async (req, res) => {
 app.get("/api/portfolios", async (req, res) => {
   try {
     if (!hasDb) return res.json({ items: [] });
-    const r = await dbQuery(`SELECT bot, cash, goal, updated_at FROM portfolios ORDER BY bot ASC`);
-    res.json({ items: r.rows || [] });
+    const p = await dbQuery(`SELECT bot, cash, goal, updated_at FROM portfolios ORDER BY bot ASC`);
+    res.json({ items: p.rows });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -598,7 +882,6 @@ app.get("/api/events/recent", async (req, res) => {
   }
 });
 
-// Trades recent (includes strategy for UI)
 app.get("/api/trades/recent", async (req, res) => {
   try {
     if (!hasDb) return res.json({ items: [] });
@@ -616,7 +899,6 @@ app.get("/api/trades/recent", async (req, res) => {
   }
 });
 
-// ✅ Trades by bot (what your drawer calls)
 app.get("/api/trades/bot/:bot", async (req, res) => {
   try {
     if (!hasDb) return res.json({ items: [] });
@@ -637,7 +919,6 @@ app.get("/api/trades/bot/:bot", async (req, res) => {
   }
 });
 
-// Universe config
 app.post("/api/universe", async (req, res) => {
   const mode = String(req.body?.mode || "any").toLowerCase();
   const custom = Array.isArray(req.body?.custom) ? req.body.custom : [];
@@ -646,7 +927,6 @@ app.post("/api/universe", async (req, res) => {
   res.json({ ok: true, universe: u });
 });
 
-// Learning speed toggle
 app.post("/api/learning/speed", async (req, res) => {
   const mode = String(req.body?.mode || "realtime").toLowerCase();
   const evalAfterSec = Number(req.body?.evalAfterSec || (mode === "accelerated" ? 60 : 3600));
@@ -655,63 +935,187 @@ app.post("/api/learning/speed", async (req, res) => {
   res.json({ ok: true, learning_speed: v });
 });
 
+// Learning impact over time (chart)
+app.get("/api/learning/impact", async (req, res) => {
+  try {
+    if (!hasDb) return res.json({ series: [] });
+
+    const days = Math.min(Math.max(Number(req.query.days || 14), 3), 60);
+    const r = await dbQuery(
+      `
+      SELECT
+        date_trunc('day', COALESCE(evaluated_at, created_at)) AS day,
+        strategy,
+        COUNT(*) FILTER (WHERE evaluated_at IS NOT NULL) AS evaluated,
+        COUNT(*) FILTER (WHERE correct = TRUE) AS correct
+      FROM learning_samples
+      WHERE created_at >= NOW() - ($1 || ' days')::interval
+      GROUP BY 1,2
+      ORDER BY 1 ASC
+    `,
+      [days]
+    );
+
+    const byStrategy = {};
+    for (const row of r.rows) {
+      const day = row.day.toISOString().slice(0, 10);
+      const strategy = row.strategy;
+      const evaluated = Number(row.evaluated || 0);
+      const correct = Number(row.correct || 0);
+      const accuracy = evaluated ? Math.round((correct / evaluated) * 1000) / 10 : null;
+
+      if (!byStrategy[strategy]) byStrategy[strategy] = [];
+      byStrategy[strategy].push({ day, evaluated, correct, accuracy });
+    }
+
+    const series = Object.entries(byStrategy).map(([strategy, points]) => ({
+      strategy,
+      points,
+    }));
+
+    res.json({ days, series });
+  } catch (e) {
+    res.status(500).json({ error: e.message, series: [] });
+  }
+});
+
 // -----------------------------
-// API: Core bot endpoint (used by Arena + runner)
+// Arena v2: General News (non-finance) + Impact mapping
+// -----------------------------
+app.get("/api/news/general", async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit || 8), 1), 12);
+    const pack = await getGeneralNews(limit);
+
+    const items = (pack.items || []).map((a) => {
+      const impact = inferImpactedTickers(a);
+      return {
+        ...a,
+        impact: {
+          tickers: impact.tickers,
+          why: impact.why,
+          horizon: impact.horizon,
+          confidence: impact.confidence,
+          ruleHits: impact.ruleHits,
+        },
+      };
+    });
+
+    res.json({ provider: pack.provider, items });
+  } catch (e) {
+    res.status(500).json({ error: e.message, provider: "error", items: [] });
+  }
+});
+
+// -----------------------------
+// Arena v2: Market Pulse (reference basket prices)
+// -----------------------------
+app.get("/api/market/pulse", async (req, res) => {
+  try {
+    const market = isMarketOpen();
+
+    let symbols = null;
+    if (req.query.symbols) {
+      symbols = String(req.query.symbols)
+        .split(",")
+        .map((s) => s.trim().toUpperCase())
+        .filter(Boolean)
+        .slice(0, 15);
+    }
+
+    if (!symbols || !symbols.length) {
+      const universe = await getUniverse();
+      symbols = universeSymbols(universe).slice(0, 10);
+    }
+
+    const results = await Promise.all(
+      symbols.map(async (sym) => {
+        const q = await getStockPrice(sym);
+        return {
+          symbol: q.symbol,
+          price: q.price,
+          changePercent: q.changePercent || 0,
+          provider: q.provider,
+        };
+      })
+    );
+
+    res.json({ market, items: results });
+  } catch (e) {
+    res.status(500).json({ error: e.message, items: [] });
+  }
+});
+
+// -----------------------------
+// Core bot endpoint (used by War Room + runner)
 // -----------------------------
 app.get("/api/bots/:symbol", async (req, res) => {
-  const valid = isValidTicker(req.params.symbol);
-  if (!valid.ok) return res.status(400).json({ error: valid.reason });
-  const symbol = valid.symbol;
+  try {
+    const symbolV = isValidTicker(req.params.symbol);
+    if (!symbolV.ok) return res.status(400).json({ error: symbolV.reason });
+    const symbol = symbolV.symbol;
 
-  const market = isMarketOpen();
-  const tradesAllowed = market.open;
+    const market = isMarketOpen();
+    const tradesAllowed = market.open;
 
-  const q = await getStockPrice(symbol);
-  const news = await getNews(symbol, 8);
+    const [q, newsPack, setting] = await Promise.all([
+      getStockPrice(symbol),
+      getNews(symbol, 8),
+      hasDb ? getSetting("learning_speed") : Promise.resolve(null),
+    ]);
 
-  const avgSent =
-    news.items && news.items.length
-      ? news.items.map((a) => sentimentScore(`${a.title} ${a.summary || ""}`)).reduce((a, b) => a + b, 0) / news.items.length
-      : 0;
+    const avgSent =
+      newsPack.items && newsPack.items.length
+        ? newsPack.items
+            .map((a) => sentimentScore(`${a.title} ${a.summary || ""}`))
+            .reduce((a, b) => a + b, 0) / newsPack.items.length
+        : 0;
 
-  const features = {
-    price: q.price,
-    changePercent: q.changePercent || 0,
-    avgSent,
-    marketOpen: market.open,
-    priceProvider: q.provider,
-    newsProvider: news.provider,
-  };
+    const features = {
+      price: q.price,
+      changePercent: q.changePercent || 0,
+      avgSent,
+      marketOpen: market.open,
+      priceProvider: q.provider,
+      newsProvider: newsPack.provider,
+    };
 
-  const bots = [];
-  for (const b of BOTS) {
-    const base = baseDecision(b.strategy, features);
-    const adjusted = await applyLearningAdjust(b.strategy, { signal: base.signal, confidence: base.confidence }, features);
-    bots.push({
-      strategy: b.strategy,
-      label: b.label,
-      horizon: b.horizon,
-      signal: adjusted.signal,
-      rationale: base.why,
-      baseConfidence: base.confidence,
-      confidence: adjusted.confidence,
-      learnedP: adjusted.learnedP,
+    const bots = [];
+    for (const b of BOTS) {
+      const base = baseDecision(b.strategy, features);
+      const adjusted = await applyLearningAdjust(
+        b.strategy,
+        { signal: base.signal, confidence: base.confidence },
+        features
+      );
+      bots.push({
+        strategy: b.strategy,
+        label: b.label,
+        horizon: b.horizon,
+        signal: adjusted.signal,
+        rationale: base.why,
+        baseConfidence: base.confidence,
+        confidence: adjusted.confidence,
+        learnedP: adjusted.learnedP,
+      });
+    }
+
+    const winner = bots.reduce((a, b) => (b.confidence > a.confidence ? b : a), bots[0]);
+
+    res.json({
+      symbol,
+      market,
+      tradesAllowed,
+      logged: bots.length,
+      logError: null,
+      features,
+      bots,
+      winner: winner.strategy,
+      news: newsPack,
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
-
-  const winner = bots.reduce((a, b) => (b.confidence > a.confidence ? b : a), bots[0]);
-
-  res.json({
-    symbol,
-    market,
-    tradesAllowed,
-    logged: bots.length,
-    logError: null,
-    features,
-    bots,
-    winner: winner.strategy,
-    news,
-  });
 });
 
 // -----------------------------
@@ -755,7 +1159,8 @@ async function evaluateLearningSamples() {
     if (ageSec < evalAfterSec) continue;
 
     const priceAfter = Number(row.price_at_signal) * (1 + (Math.random() - 0.5) * 0.01);
-    const outcomePct = ((priceAfter - Number(row.price_at_signal)) / Number(row.price_at_signal)) * 100;
+    const outcomePct =
+      ((priceAfter - Number(row.price_at_signal)) / Number(row.price_at_signal)) * 100;
     const correct = outcomePct >= 0;
 
     await dbQuery(
@@ -803,11 +1208,13 @@ async function runnerTick() {
   await emitEvent("carousel_tick", { symbol, market });
 
   const q = await getStockPrice(symbol);
-  const news = await getNews(symbol, 8);
+  const newsPack = await getNews(symbol, 8);
 
   const avgSent =
-    news.items && news.items.length
-      ? news.items.map((a) => sentimentScore(`${a.title} ${a.summary || ""}`)).reduce((a, b) => a + b, 0) / news.items.length
+    newsPack.items && newsPack.items.length
+      ? newsPack.items
+          .map((a) => sentimentScore(`${a.title} ${a.summary || ""}`))
+          .reduce((a, b) => a + b, 0) / newsPack.items.length
       : 0;
 
   const features = {
@@ -816,13 +1223,17 @@ async function runnerTick() {
     avgSent,
     marketOpen: market.open,
     priceProvider: q.provider,
-    newsProvider: news.provider,
+    newsProvider: newsPack.provider,
   };
 
   const bots = [];
   for (const b of BOTS) {
     const base = baseDecision(b.strategy, features);
-    const adjusted = await applyLearningAdjust(b.strategy, { signal: base.signal, confidence: base.confidence }, features);
+    const adjusted = await applyLearningAdjust(
+      b.strategy,
+      { signal: base.signal, confidence: base.confidence },
+      features
+    );
     bots.push({
       strategy: b.strategy,
       label: b.label,
@@ -835,9 +1246,7 @@ async function runnerTick() {
     });
   }
 
-  const winner = bots
-    .sort((a, b) => b.confidence - a.confidence)
-    .slice(0, RUNNER_TRADE_TOP)[0];
+  const winner = bots.sort((a, b) => b.confidence - a.confidence).slice(0, RUNNER_TRADE_TOP)[0];
 
   // log learning samples for all bots
   let logged = 0;
@@ -898,9 +1307,12 @@ async function runnerTick() {
             await applyTradeToPortfolio({ bot, symbol, side: "BUY", qty, price: Number(q.price) });
           }
         } else if (side === "SELL") {
-          const pos = await dbQuery(`SELECT qty FROM positions WHERE bot=$1 AND symbol=$2`, [bot, symbol]);
+          const pos = await dbQuery(`SELECT qty FROM positions WHERE bot=$1 AND symbol=$2`, [
+            bot,
+            symbol,
+          ]);
           const held = pos.rows[0] ? Number(pos.rows[0].qty) : 0;
-          const qty = Math.floor((held * 0.25) * 1000) / 1000;
+          const qty = Math.floor(held * 0.25 * 1000) / 1000;
 
           if (qty > 0) {
             executedTrade = await recordTrade({
