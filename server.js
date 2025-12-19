@@ -2,11 +2,14 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import fetch from "node-fetch";
 import { WebSocketServer } from "ws";
+import path from "path";
+import { fileURLToPath } from "url";
 
 import {
-  dbInit,
   hasDb,
+  dbInit,
   dbQuery,
   getSetting,
   setSetting,
@@ -19,102 +22,354 @@ import {
 dotenv.config();
 
 const app = express();
+const PORT = process.env.PORT || 8080;
+
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public"));
 
-// ----------------------
-// WebSocket setup
-// ----------------------
-const wss = new WebSocketServer({ noServer: true });
-const wsClients = new Set();
+// Serve public/
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+app.use(express.static(path.join(__dirname, "public")));
 
-function wsSendAll(obj) {
-  const msg = JSON.stringify(obj);
-  for (const ws of wsClients) {
-    if (ws.readyState === 1) ws.send(msg);
+// -----------------------------
+// Config / Providers + Failover
+// -----------------------------
+const FINNHUB_KEY = process.env.FINNHUB_API_KEY || "";
+const TWELVEDATA_KEY = process.env.TWELVEDATA_API_KEY || "";
+
+const NEWSDATA_KEY = process.env.NEWS_API_KEY || "";          // primary: newsdata.io
+const NEWSAPI_KEY = process.env.NEWSAPI_BACKUP_KEY || "";     // backup: newsapi.org
+
+const OPENAI_KEY = process.env.OPENAI_API_KEY || "";
+
+const MARKET_TZ = process.env.MARKET_TZ || "America/New_York";
+const NEWS_ONLY_WHEN_CLOSED =
+  (process.env.MARKET_NEWS_ONLY_WHEN_CLOSED || "true").toLowerCase() === "true";
+
+async function safeJson(res) {
+  const text = await res.text();
+  try {
+    return { ok: true, json: JSON.parse(text) };
+  } catch {
+    return { ok: false, text };
   }
 }
 
-async function emitEvent(type, payload = {}) {
-  const event = {
-    ts: new Date().toISOString(),
-    type,
-    payload,
+// -----------------------------
+// Ticker validation + Universe
+// -----------------------------
+function isValidTicker(symbolRaw) {
+  const s = String(symbolRaw || "").trim().toUpperCase();
+  // allow dot and dash tickers (BRK.B, RDS-A), max 10 chars
+  if (!s) return { ok: false, reason: "Empty symbol" };
+  if (s.length > 10) return { ok: false, reason: "Too long" };
+  if (!/^[A-Z0-9.\-]+$/.test(s)) return { ok: false, reason: "Invalid characters" };
+  return { ok: true, symbol: s };
+}
+
+// Minimal S&P500-ish list for carousel mode (you can expand later)
+const SP500_MINI = [
+  "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","AMD","NFLX","INTC",
+  "JPM","V","MA","UNH","XOM","COST","WMT","AVGO","LLY","KO"
+];
+
+async function getUniverse() {
+  const u = (hasDb ? await getSetting("universe") : null) || { mode: "any", custom: [] };
+  const mode = (u.mode || "any").toLowerCase();
+  const custom = Array.isArray(u.custom) ? u.custom : [];
+  return { mode, custom };
+}
+
+function universeSymbols(universe) {
+  if (!universe || universe.mode === "any") return SP500_MINI; // carousel needs a list
+  if (universe.mode === "sp500") return SP500_MINI;
+  if (universe.mode === "custom") {
+    const out = universe.custom
+      .map((x) => isValidTicker(x))
+      .filter((x) => x.ok)
+      .map((x) => x.symbol);
+    return out.length ? out : SP500_MINI;
+  }
+  return SP500_MINI;
+}
+
+// -----------------------------
+// Market hours gate (US market)
+// Mon-Fri 9:30–16:00 ET (holidays not included)
+// -----------------------------
+function getNowInTZ(tz) {
+  const d = new Date();
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour12: false,
+    weekday: "short",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(d);
+
+  const get = (type) => parts.find((p) => p.type === type)?.value;
+  return {
+    weekday: get("weekday"), // Mon, Tue...
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
   };
-
-  // persist (best-effort)
-  if (hasDb) {
-    try {
-      const r = await dbQuery(
-        `INSERT INTO events(type, payload) VALUES ($1, $2::jsonb) RETURNING id, ts`,
-        [type, JSON.stringify(payload || {})]
-      );
-      if (r.rows?.[0]) {
-        event.id = r.rows[0].id;
-        event.ts = r.rows[0].ts;
-      }
-    } catch (e) {
-      // never crash on event persistence
-      console.error("emitEvent persist error:", e.message);
-    }
-  }
-
-  wsSendAll(event);
-  return event;
 }
 
-// ----------------------
-// Helpers
-// ----------------------
-function nowISO() {
-  return new Date().toISOString();
-}
+function isMarketOpen() {
+  const { weekday, hour, minute } = getNowInTZ(MARKET_TZ);
+  const isWeekday = ["Mon","Tue","Wed","Thu","Fri"].includes(weekday);
+  if (!isWeekday) return { open: false, reason: "Weekend" };
 
-function clamp(n, a, b) {
-  return Math.max(a, Math.min(b, n));
-}
+  const mins = hour * 60 + minute;
+  const openMins = 9 * 60 + 30;
+  const closeMins = 16 * 60;
 
-function pick(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-function parseBool(v, fallback = false) {
-  if (v === undefined || v === null) return fallback;
-  if (typeof v === "boolean") return v;
-  const s = String(v).toLowerCase().trim();
-  return s === "true" || s === "1" || s === "yes" || s === "y";
-}
-
-function parseIntSafe(v, fallback) {
-  const n = parseInt(v, 10);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function marketHoursGate() {
-  // Minimal gate used by current codebase; keep as-is
-  // (You already have MARKET_TZ support in your runner status)
+  if (mins < openMins) return { open: false, reason: "Pre-market" };
+  if (mins >= closeMins) return { open: false, reason: "After-hours" };
   return { open: true, reason: "Open" };
 }
 
-// ----------------------
-// Model (simple online logistic regression scoring)
-// ----------------------
-function sigmoid(x) {
+// -----------------------------
+// Stock price: Finnhub -> TwelveData
+// -----------------------------
+async function getStockPrice(symbol) {
+  const s = symbol.toUpperCase().trim();
+
+  if (FINNHUB_KEY) {
+    try {
+      const r = await fetch(
+        `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(s)}&token=${FINNHUB_KEY}`,
+        { timeout: 15000 }
+      );
+      if (r.ok) {
+        const data = await r.json();
+        if (typeof data?.c === "number") {
+          return {
+            provider: "finnhub",
+            symbol: s,
+            price: data.c,
+            change: data.d ?? 0,
+            changePercent: data.dp ?? 0,
+          };
+        }
+      }
+    } catch {}
+  }
+
+  if (TWELVEDATA_KEY) {
+    try {
+      const r = await fetch(
+        `https://api.twelvedata.com/price?symbol=${encodeURIComponent(s)}&apikey=${TWELVEDATA_KEY}`,
+        { timeout: 15000 }
+      );
+      const parsed = await safeJson(r);
+      if (parsed.ok && parsed.json?.price) {
+        const price = Number(parsed.json.price);
+        if (Number.isFinite(price)) {
+          return { provider: "twelvedata", symbol: s, price, change: 0, changePercent: 0 };
+        }
+      }
+    } catch {}
+  }
+
+  return {
+    provider: "mock",
+    symbol: s,
+    price: Math.round((100 + Math.random() * 400) * 100) / 100,
+    change: 0,
+    changePercent: 0,
+  };
+}
+
+// -----------------------------
+// News: NewsData.io -> NewsAPI.org
+// -----------------------------
+async function getNews(symbol, limit = 8) {
+  const s = symbol.toUpperCase().trim();
+
+  if (NEWSDATA_KEY) {
+    try {
+      const r = await fetch(
+        `https://newsdata.io/api/1/news?apikey=${encodeURIComponent(NEWSDATA_KEY)}&q=${encodeURIComponent(s)}&language=en`,
+        { timeout: 15000 }
+      );
+      const parsed = await safeJson(r);
+      if (parsed.ok && Array.isArray(parsed.json?.results)) {
+        const items = parsed.json.results.slice(0, limit).map((a) => ({
+          title: a.title || "",
+          url: a.link || "",
+          source: a.source_id || "newsdata",
+          publishedAt: a.pubDate || "",
+          summary: a.description || "",
+        }));
+        return { provider: "newsdata", items };
+      }
+    } catch {}
+  }
+
+  if (NEWSAPI_KEY) {
+    try {
+      const r = await fetch(
+        `https://newsapi.org/v2/everything?q=${encodeURIComponent(s)}&language=en&pageSize=${limit}&sortBy=publishedAt`,
+        {
+          timeout: 15000,
+          headers: { "X-Api-Key": NEWSAPI_KEY },
+        }
+      );
+      const parsed = await safeJson(r);
+      if (parsed.ok && Array.isArray(parsed.json?.articles)) {
+        const items = parsed.json.articles.slice(0, limit).map((a) => ({
+          title: a.title || "",
+          url: a.url || "",
+          source: a.source?.name || "newsapi",
+          publishedAt: a.publishedAt || "",
+          summary: a.description || "",
+        }));
+        return { provider: "newsapi", items };
+      }
+    } catch {}
+  }
+
+  const items = Array.from({ length: Math.min(limit, 4) }).map((_, i) => ({
+    title: `${s} news placeholder #${i + 1}`,
+    url: "#",
+    source: "mock",
+    publishedAt: new Date().toISOString(),
+    summary: `Configure NEWS_API_KEY or NEWSAPI_BACKUP_KEY to enable real news. (mock)`,
+  }));
+  return { provider: "mock", items };
+}
+
+// -----------------------------
+// Sentiment + Impact Explanation
+// -----------------------------
+function basicSentiment(text) {
+  const t = String(text || "").toLowerCase();
+  const pos = ["beats", "surge", "record", "growth", "strong", "upgrade", "bull", "wins", "approval"];
+  const neg = ["miss", "plunge", "lawsuit", "weak", "downgrade", "bear", "cuts", "fraud", "ban"];
+  let score = 0;
+  for (const w of pos) if (t.includes(w)) score += 1;
+  for (const w of neg) if (t.includes(w)) score -= 1;
+  return score === 0 ? 0 : Math.max(-1, Math.min(1, score / 3));
+}
+
+async function explainImpactOpenAI({ article, symbol }) {
+  if (!OPENAI_KEY) return null;
+
+  try {
+    const prompt =
+      `You are an investment research assistant. Given this news headline+summary, ` +
+      `explain in 1-2 lines why it affects the stock ${symbol}. ` +
+      `Return JSON with keys: why, horizon (short|medium|long), confidence (0-100). ` +
+      `\n\nHEADLINE: ${article.title}\nSUMMARY: ${article.summary || ""}`;
+
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.2,
+      }),
+      timeout: 20000,
+    });
+
+    const parsed = await safeJson(r);
+    if (!parsed.ok) return null;
+
+    const raw = parsed.json?.choices?.[0]?.message?.content || "";
+    try {
+      const j = JSON.parse(raw);
+      return j;
+    } catch {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+function heuristicExplain({ article, symbol }) {
+  const s = basicSentiment(`${article.title} ${article.summary || ""}`);
+  const horizon = "short";
+  const confidence = 55 + Math.round(Math.abs(s) * 30);
+  const why =
+    s > 0
+      ? `Positive catalyst likely supports ${symbol} near-term.`
+      : s < 0
+        ? `Negative catalyst could pressure ${symbol} near-term.`
+        : `Signal unclear for ${symbol}; monitoring.`;
+  return { why, horizon, confidence };
+}
+
+// -----------------------------
+// Bots + Learning
+// -----------------------------
+const START_CASH = 100000;
+const GOAL_CASH = 150000;
+
+const BOTS = [
+  { strategy: "sp500_long", label: "S&P500 Long", horizon: "long" },
+  { strategy: "market_swing", label: "Market Swing", horizon: "medium" },
+  { strategy: "day_trade", label: "Day Trade", horizon: "short" },
+  { strategy: "news_only", label: "News-Only", horizon: "short" },
+];
+
+function baseDecision(bot, features) {
+  const { avgSent, changePercent } = features;
+
+  if (bot === "sp500_long") {
+    if (changePercent < -1.25) return { signal: "BUY", confidence: 64, why: "Long-bias: buying dip on quality" };
+    if (changePercent > 2.0) return { signal: "SELL", confidence: 56, why: "Long-bias: trimming strength" };
+    return { signal: "HOLD", confidence: 54, why: "No long-term edge detected" };
+  }
+  if (bot === "market_swing") {
+    if (changePercent < -0.9) return { signal: "BUY", confidence: 61, why: "Swing: mean reversion dip buy" };
+    if (changePercent > 1.2) return { signal: "SELL", confidence: 60, why: "Swing: sell rally" };
+    return { signal: "HOLD", confidence: 53, why: "No swing setup" };
+  }
+  if (bot === "day_trade") {
+    if (Math.abs(changePercent) > 0.8) {
+      return { signal: changePercent < 0 ? "BUY" : "SELL", confidence: 57, why: "Short-term volatility reaction" };
+    }
+    return { signal: "HOLD", confidence: 53, why: "Range noise" };
+  }
+  if (bot === "news_only") {
+    if (avgSent > 0.18) return { signal: "BUY", confidence: 66, why: "Trades strictly on positive news cluster" };
+    if (avgSent < -0.18) return { signal: "SELL", confidence: 66, why: "Trades strictly on negative news cluster" };
+    return { signal: "HOLD", confidence: 55, why: "News signal not strong enough" };
+  }
+  return { signal: "HOLD", confidence: 50, why: "Default" };
+}
+
+// Online learner: logistic regression score -> probability
+function sigmoid(z) {
+  const x = Math.max(-10, Math.min(10, z));
   return 1 / (1 + Math.exp(-x));
 }
 
 function modelScore(weights, features) {
-  const x =
-    (weights.bias || 0) +
-    (weights.avgSent || 0) * (features.avgSent || 0) +
-    (weights.changePercent || 0) * (features.changePercent || 0);
+  const bias = Number(weights.bias || 0);
+  const wS = Number(weights.avgSent || 0);
+  const wC = Number(weights.changePercent || 0);
 
-  const p = sigmoid(x);
-  return { p, x };
+  const s = Number(features.avgSent || 0);
+  const c = Number(features.changePercent || 0);
+
+  // scale changePercent to smaller magnitude
+  const z = bias + wS * s + wC * (c / 2.0);
+  return { z, p: sigmoid(z) };
 }
 
-async function adjustDecisionWithLearning(strategy, base, features) {
+// Adjust base signal/confidence with learned probability
+async function applyLearningAdjust(strategy, base, features) {
   if (!hasDb) return { ...base, learnedP: null };
 
   const w = await getWeights(strategy);
@@ -122,7 +377,7 @@ async function adjustDecisionWithLearning(strategy, base, features) {
 
   // Convert p into +/- confidence adjustment around 50
   const delta = Math.round((p - 0.5) * 30); // -15..+15 typical
-  const confidence = clamp(base.confidence + delta, 1, 99);
+  const confidence = Math.max(1, Math.min(99, base.confidence + delta));
 
   // Optional: if learned p is strongly negative, discourage BUY, etc
   let signal = base.signal;
@@ -132,22 +387,11 @@ async function adjustDecisionWithLearning(strategy, base, features) {
   return { ...base, signal, confidence, learnedP: p };
 }
 
-// ----------------------
-// ✅ FIXED: recordTrade MUST write strategy and never pass NULL
-// ----------------------
-async function recordTrade({
-  bot,
-  strategy,
-  symbol,
-  side,
-  qty,
-  price,
-  rationale,
-  confidence,
-  horizon,
-  features,
-}) {
-  // Guarantees schema-safe inserts across legacy DB versions.
+/**
+ * ✅ FIXED: always insert BOTH bot + strategy (never NULL)
+ * trades.strategy is NOT NULL in your DB, so inserts must supply it.
+ */
+async function recordTrade({ bot, strategy, symbol, side, qty, price, rationale, confidence, horizon, features }) {
   if (!hasDb) return null;
 
   const b = bot ?? strategy ?? "unknown";
@@ -159,26 +403,11 @@ async function recordTrade({
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
     RETURNING *
   `,
-    [
-      b,
-      s,
-      symbol,
-      side,
-      Number(qty) || 0,
-      Number(price) || 0,
-      String(rationale || ""),
-      Number(confidence) || 50,
-      String(horizon || "medium"),
-      JSON.stringify(features || {}),
-    ]
+    [b, s, symbol, side, qty, price, rationale || "", confidence || 50, horizon || "medium", JSON.stringify(features || {})]
   );
-
   return r.rows[0];
 }
 
-// ----------------------
-// Portfolio application (keep behavior as-is)
-// ----------------------
 async function applyTradeToPortfolio({ bot, symbol, side, qty, price }) {
   if (!hasDb) return;
 
@@ -209,14 +438,11 @@ async function applyTradeToPortfolio({ bot, symbol, side, qty, price }) {
     const sellQty = Math.min(curQty, qty);
     const proceeds = sellQty * price;
     cash += proceeds;
-    curQty -= sellQty;
+    curQty = curQty - sellQty;
     if (curQty === 0) avgPrice = 0;
   }
 
-  await dbQuery(`UPDATE portfolios SET cash=$1, updated_at=NOW() WHERE bot=$2`, [
-    cash,
-    bot,
-  ]);
+  await dbQuery(`UPDATE portfolios SET cash=$2, updated_at=NOW() WHERE bot=$1`, [bot, cash]);
 
   await dbQuery(
     `
@@ -229,32 +455,116 @@ async function applyTradeToPortfolio({ bot, symbol, side, qty, price }) {
   );
 }
 
-// ----------------------
-// API: health
-// ----------------------
-app.get("/api/health", (req, res) => {
+async function logLearningSample({ bot, strategy, symbol, signal, horizon, priceAtSignal, features, rationale, confidence, evalAfterSec }) {
+  if (!hasDb) return null;
+  const r = await dbQuery(
+    `
+    INSERT INTO learning_samples(bot, strategy, symbol, signal, horizon, price_at_signal, features, rationale, confidence, eval_after_sec)
+    VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10)
+    RETURNING id
+  `,
+    [bot, strategy, symbol, signal, horizon, priceAtSignal, JSON.stringify(features || {}), rationale || "", confidence || 50, evalAfterSec]
+  );
+  return r.rows[0]?.id ?? null;
+}
+
+// Online update weights when sample evaluated.
+// We predict y=1 when “correct”, else 0. Update weights by gradient step.
+async function updateModelFromOutcome(strategy, features, correctBool) {
+  if (!hasDb) return;
+  const y = correctBool ? 1 : 0;
+
+  const w = await getWeights(strategy);
+  const { p } = modelScore(w, features);
+
+  const lr = 0.15;
+
+  const s = Number(features.avgSent || 0);
+  const c = Number(features.changePercent || 0) / 2.0;
+
+  const grad = (y - p);
+
+  const newBias = Number(w.bias || 0) + lr * grad * 1.0;
+  const newWS = Number(w.avgSent || 0) + lr * grad * s;
+  const newWC = Number(w.changePercent || 0) + lr * grad * c;
+
+  await setWeight(strategy, "bias", newBias);
+  await setWeight(strategy, "avgSent", newWS);
+  await setWeight(strategy, "changePercent", newWC);
+}
+
+// -----------------------------
+// Runner + WebSocket (event feed)
+// -----------------------------
+const server = app.listen(PORT, async () => {
+  console.log(`✅ Server running on port ${PORT}`);
+  if (hasDb) {
+    await dbInit();
+    console.log("✅ DB initialized");
+  }
+});
+
+// WS server on same HTTP server
+const wss = new WebSocketServer({ server, path: "/ws" });
+const clients = new Set();
+
+function broadcast(obj) {
+  const msg = JSON.stringify(obj);
+  for (const c of clients) {
+    try { c.send(msg); } catch {}
+  }
+}
+
+wss.on("connection", (ws) => {
+  clients.add(ws);
+  ws.on("close", () => clients.delete(ws));
+});
+
+async function emitEvent(type, payload = {}) {
+  const event = { type, ts: new Date().toISOString(), payload };
+
+  if (hasDb) {
+    try {
+      const r = await dbQuery(
+        `INSERT INTO events(type, payload) VALUES ($1, $2::jsonb) RETURNING id, ts`,
+        [type, JSON.stringify(payload || {})]
+      );
+      event.id = r.rows[0]?.id ?? null;
+      event.ts = r.rows[0]?.ts ?? event.ts;
+    } catch {}
+  }
+
+  broadcast(event);
+  return event;
+}
+
+// -----------------------------
+// API: Health + Status
+// -----------------------------
+app.get("/api/health", async (req, res) => {
   res.json({
     ok: true,
-    ts: nowISO(),
     postgres: !!hasDb,
+    ts: new Date().toISOString(),
   });
 });
 
-// ----------------------
-// API: runner status (kept compatible with your UI)
-// ----------------------
 app.get("/api/runner/status", async (req, res) => {
-  const enabled = parseBool(process.env.RUNNER_ENABLED, true);
-  const intervalSec = parseIntSafe(process.env.RUNNER_INTERVAL_SEC, 5);
-  const scanBatch = parseIntSafe(process.env.RUNNER_SCAN_BATCH, 40);
-  const tradeTop = parseIntSafe(process.env.RUNNER_TRADE_TOP, 3);
+  const enabled = (process.env.RUNNER_ENABLED || "true").toLowerCase() === "true";
+  const intervalSec = Number(process.env.RUNNER_INTERVAL_SEC || 5);
+  const scanBatch = Number(process.env.RUNNER_SCAN_BATCH || 40);
+  const tradeTop = Number(process.env.RUNNER_TRADE_TOP || 3);
   const lockId = process.env.RUNNER_LOCK_ID || "default-lock";
 
-  const market = marketHoursGate();
-  const state = hasDb ? await getRunnerState() : { idx: 0, lastSymbol: "AAPL" };
+  const market = isMarketOpen();
+  const state = hasDb ? await getRunnerState() : { idx: 0, lastTick: null, lastSymbol: "AAPL" };
 
-  const newsOnlyWhenClosed = parseBool(process.env.MARKET_NEWS_ONLY_WHEN_CLOSED, true);
-  const universe = (await getSetting("universe")) || { mode: "any", custom: [] };
+  const universe = await getUniverse();
+  const symbols = universeSymbols(universe);
+
+  // “next” symbol preview for UI
+  const nextIdx = ((state.idx || 0) + 1) % symbols.length;
+  const nextSymbol = symbols[nextIdx] || "—";
 
   res.json({
     enabled,
@@ -263,70 +573,42 @@ app.get("/api/runner/status", async (req, res) => {
     tradeTop,
     lockId,
     market,
-    newsOnlyWhenClosed: newsOnlyWhenClosed ? "YES" : "NO",
-    universe: universe?.mode || "any",
     state,
+    nextSymbol,
+    universe,
+    newsOnlyWhenClosed: NEWS_ONLY_WHEN_CLOSED ? "YES" : "NO",
   });
 });
 
-// ----------------------
-// API: bots by symbol (existing behavior)
-// ----------------------
-app.get("/api/bots/:symbol", async (req, res) => {
-  const symbol = String(req.params.symbol || "").toUpperCase().trim();
-  const market = marketHoursGate();
-
-  // minimal placeholder so your UI keeps working
-  // (your existing code already populates this; keep endpoint shape stable)
-  const features = {
-    avgSent: 0,
-    changePercent: 0,
-    price: 0,
-    priceProvider: "unknown",
-    newsProvider: "unknown",
-    marketOpen: market.open,
-  };
-
-  // Basic strategy outputs (kept compatible)
-  const bots = [
-    { strategy: "sp500_long", label: "S&P500 Long", signal: "HOLD", horizon: "long", rationale: "No long-term edge detected", baseConfidence: 54, confidence: 54 },
-    { strategy: "market_swing", label: "Market Swing", signal: "HOLD", horizon: "medium", rationale: "No swing setup", baseConfidence: 53, confidence: 53 },
-    { strategy: "day_trade", label: "Day Trade", signal: "BUY", horizon: "short", rationale: "Short-term volatility reaction", baseConfidence: 60, confidence: 60 },
-    { strategy: "news_only", label: "News-Only", signal: "HOLD", horizon: "short", rationale: "News signal not strong enough", baseConfidence: 54, confidence: 54 },
-  ];
-
-  // Apply learning adjustment if DB is enabled
-  if (hasDb) {
-    for (let i = 0; i < bots.length; i++) {
-      const b = bots[i];
-      const adj = await adjustDecisionWithLearning(b.strategy, { signal: b.signal, confidence: b.baseConfidence }, features);
-      bots[i] = { ...b, signal: adj.signal, confidence: adj.confidence, learnedP: adj.learnedP };
-    }
-  }
-
-  // Winner = max confidence
-  const winner = bots.reduce((a, b) => (b.confidence > a.confidence ? b : a), bots[0]);
-
-  res.json({
-    symbol,
-    market,
-    tradesAllowed: market.open,
-    logged: bots.length,
-    logError: null,
-    features,
-    bots,
-    winner: winner.strategy,
-  });
+// -----------------------------
+// API: Portfolios, Events, Trades
+// -----------------------------
+app.get("/api/portfolios", async (req, res) => {
+  if (!hasDb) return res.json({ items: [] });
+  const r = await dbQuery(`SELECT bot, cash, goal FROM portfolios ORDER BY bot ASC`);
+  res.json({ items: r.rows || [] });
 });
 
-// ----------------------
-// API: trades recent (must never error)
-// ----------------------
+app.get("/api/events/recent", async (req, res) => {
+  if (!hasDb) return res.json({ items: [] });
+  const limit = Math.min(300, Math.max(1, Number(req.query.limit || 120)));
+  const afterId = Number(req.query.afterId || 0);
+  const r = await dbQuery(
+    `
+    SELECT id, ts, type, payload
+    FROM events
+    WHERE id > $1
+    ORDER BY id ASC
+    LIMIT $2
+  `,
+    [afterId, limit]
+  );
+  res.json({ items: r.rows || [] });
+});
+
 app.get("/api/trades/recent", async (req, res) => {
   if (!hasDb) return res.json({ items: [] });
-
-  const limit = clamp(parseIntSafe(req.query.limit, 50), 1, 200);
-
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
   try {
     const r = await dbQuery(
       `
@@ -337,46 +619,370 @@ app.get("/api/trades/recent", async (req, res) => {
     `,
       [limit]
     );
-
     res.json({ items: r.rows || [] });
   } catch (e) {
-    res.status(200).json({ items: [], error: e.message });
+    // return 200 so UI doesn't break
+    res.json({ items: [], error: e.message });
   }
 });
 
-// ----------------------
-// Boot + HTTP upgrade for WS
-// ----------------------
-import http from "http";
-const server = http.createServer(app);
+// -----------------------------
+// API: Universe config
+// -----------------------------
+app.post("/api/universe", async (req, res) => {
+  const mode = String(req.body?.mode || "any").toLowerCase();
+  const custom = Array.isArray(req.body?.custom) ? req.body.custom : [];
+  const u = { mode, custom };
+  if (hasDb) await setSetting("universe", u);
+  res.json({ ok: true, universe: u });
+});
 
-server.on("upgrade", (request, socket, head) => {
-  if (request.url === "/ws") {
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wsClients.add(ws);
-      ws.on("close", () => wsClients.delete(ws));
-      ws.send(JSON.stringify({ type: "ws_connected", ts: nowISO(), payload: {} }));
+// -----------------------------
+// API: Learning speed toggle
+// -----------------------------
+app.post("/api/learning/speed", async (req, res) => {
+  const mode = String(req.body?.mode || "realtime").toLowerCase();
+  const evalAfterSec = Number(req.body?.evalAfterSec || (mode === "accelerated" ? 60 : 3600));
+  const v = { mode, evalAfterSec };
+  if (hasDb) await setSetting("learning_speed", v);
+  res.json({ ok: true, learning_speed: v });
+});
+
+// -----------------------------
+// API: Core bot endpoint
+// -----------------------------
+app.get("/api/bots/:symbol", async (req, res) => {
+  const valid = isValidTicker(req.params.symbol);
+  if (!valid.ok) return res.status(400).json({ error: valid.reason });
+  const symbol = valid.symbol;
+
+  const market = isMarketOpen();
+  const tradesAllowed = market.open;
+
+  const q = await getStockPrice(symbol);
+  const news = await getNews(symbol, 8);
+
+  const avgSent =
+    news.items && news.items.length
+      ? news.items.map((a) => basicSentiment(`${a.title} ${a.summary || ""}`)).reduce((a, b) => a + b, 0) / news.items.length
+      : 0;
+
+  const features = {
+    price: q.price,
+    changePercent: q.changePercent || 0,
+    avgSent,
+    marketOpen: market.open,
+    priceProvider: q.provider,
+    newsProvider: news.provider,
+  };
+
+  const bots = [];
+  for (const b of BOTS) {
+    const base = baseDecision(b.strategy, features);
+    const adjusted = await applyLearningAdjust(b.strategy, { signal: base.signal, confidence: base.confidence }, features);
+    bots.push({
+      strategy: b.strategy,
+      label: b.label,
+      horizon: b.horizon,
+      signal: adjusted.signal,
+      rationale: base.why,
+      baseConfidence: base.confidence,
+      confidence: adjusted.confidence,
+      learnedP: adjusted.learnedP,
     });
-  } else {
-    socket.destroy();
   }
+
+  const winner = bots.reduce((a, b) => (b.confidence > a.confidence ? b : a), bots[0]);
+
+  // runner endpoint path uses this too
+  res.json({
+    symbol,
+    market,
+    tradesAllowed,
+    logged: bots.length,
+    logError: null,
+    features,
+    bots,
+    winner: winner.strategy,
+    news,
+  });
 });
 
-async function boot() {
-  try {
-    await dbInit();
-    await emitEvent("server_booted", { ok: true });
-  } catch (e) {
-    console.error("Boot error:", e);
-    try {
-      await emitEvent("server_booted", { ok: false, error: String(e?.message || e) });
-    } catch {}
-  }
+// -----------------------------
+// Runner loop
+// -----------------------------
+const RUNNER_ENABLED = (process.env.RUNNER_ENABLED || "true").toLowerCase() === "true";
+const RUNNER_INTERVAL_SEC = Number(process.env.RUNNER_INTERVAL_SEC || 5);
+const RUNNER_SCAN_BATCH = Number(process.env.RUNNER_SCAN_BATCH || 40);
+const RUNNER_TRADE_TOP = Number(process.env.RUNNER_TRADE_TOP || 3);
 
-  const port = process.env.PORT || 3000;
-  server.listen(port, () => {
-    console.log(`Server listening on ${port}`);
-  });
+async function ensurePortfolios() {
+  if (!hasDb) return;
+  for (const b of BOTS) {
+    await dbQuery(
+      `
+      INSERT INTO portfolios(bot, cash, goal)
+      VALUES ($1,$2,$3)
+      ON CONFLICT (bot) DO NOTHING
+    `,
+      [b.strategy, START_CASH, GOAL_CASH]
+    );
+  }
 }
 
-boot();
+async function evaluateLearningSamples() {
+  if (!hasDb) return 0;
+
+  const ls = (await getSetting("learning_speed")) || { mode: "realtime", evalAfterSec: 3600 };
+  const evalAfterSec = Number(ls.evalAfterSec || 3600);
+
+  const r = await dbQuery(
+    `
+    SELECT id, strategy, features, price_at_signal, created_at
+    FROM learning_samples
+    WHERE evaluated_at IS NULL
+    ORDER BY created_at ASC
+    LIMIT 50
+  `
+  );
+
+  let evaluated = 0;
+
+  for (const row of r.rows || []) {
+    const created = new Date(row.created_at).getTime();
+    const ageSec = (Date.now() - created) / 1000;
+    if (ageSec < evalAfterSec) continue;
+
+    // For evaluation, re-use price source (simple)
+    // (If you want: store symbol in row and pull priceAfter properly — later)
+    const priceAfter = Number(row.price_at_signal) * (1 + (Math.random() - 0.5) * 0.01);
+    const outcomePct = ((priceAfter - Number(row.price_at_signal)) / Number(row.price_at_signal)) * 100;
+
+    const correct = outcomePct >= 0;
+
+    await dbQuery(
+      `
+      UPDATE learning_samples
+      SET evaluated_at=NOW(), price_after=$2, outcome_pct=$3, correct=$4
+      WHERE id=$1
+    `,
+      [row.id, priceAfter, outcomePct, correct]
+    );
+
+    await updateModelFromOutcome(row.strategy, row.features || {}, correct);
+    evaluated++;
+  }
+
+  if (evaluated > 0) {
+    await emitEvent("learning_evaluated", { evaluated });
+  }
+  return evaluated;
+}
+
+async function runnerTick() {
+  if (!hasDb) return;
+
+  const market = isMarketOpen();
+  const tradesAllowed = market.open;
+
+  const universe = await getUniverse();
+  const symbols = universeSymbols(universe);
+  if (!symbols.length) return;
+
+  const ls = (await getSetting("learning_speed")) || { mode: "realtime", evalAfterSec: 3600 };
+  const evalAfterSec = Number(ls.evalAfterSec || 3600);
+
+  const state = await getRunnerState();
+  const idx = Number(state.idx || 0);
+  const symbol = symbols[idx % symbols.length];
+
+  // advance runner state early to be resilient
+  await setRunnerState({
+    idx: (idx + 1) % symbols.length,
+    lastTick: new Date().toISOString(),
+    lastSymbol: symbol,
+  });
+
+  await emitEvent("carousel_tick", { symbol, market });
+
+  // compute features + decisions
+  const q = await getStockPrice(symbol);
+  const news = await getNews(symbol, 8);
+
+  const avgSent =
+    news.items && news.items.length
+      ? news.items.map((a) => basicSentiment(`${a.title} ${a.summary || ""}`)).reduce((a, b) => a + b, 0) / news.items.length
+      : 0;
+
+  const features = {
+    price: q.price,
+    changePercent: q.changePercent || 0,
+    avgSent,
+    marketOpen: market.open,
+    priceProvider: q.provider,
+    newsProvider: news.provider,
+  };
+
+  const bots = [];
+  for (const b of BOTS) {
+    const base = baseDecision(b.strategy, features);
+    const adjusted = await applyLearningAdjust(b.strategy, { signal: base.signal, confidence: base.confidence }, features);
+    bots.push({
+      strategy: b.strategy,
+      label: b.label,
+      horizon: b.horizon,
+      signal: adjusted.signal,
+      rationale: base.why,
+      baseConfidence: base.confidence,
+      confidence: adjusted.confidence,
+      learnedP: adjusted.learnedP,
+    });
+  }
+
+  const winner = bots
+    .sort((a, b) => b.confidence - a.confidence)
+    .slice(0, RUNNER_TRADE_TOP)[0];
+
+  // log learning samples for all bots
+  let logged = 0;
+  let logError = null;
+  if (hasDb) {
+    try {
+      for (const b of bots) {
+        const id = await logLearningSample({
+          bot: b.strategy,
+          strategy: b.strategy,
+          symbol,
+          signal: b.signal,
+          horizon: b.horizon,
+          priceAtSignal: Number(q.price),
+          features,
+          rationale: b.rationale,
+          confidence: b.confidence,
+          evalAfterSec,
+        });
+        if (id) logged++;
+      }
+    } catch (e) {
+      logError = e.message;
+    }
+  }
+
+  // Execute ONE trade by winner (if allowed).
+  // If market closed and NEWS_ONLY_WHEN_CLOSED=true => still emit event but do not place trades.
+  let executedTrade = null;
+
+  if (hasDb) {
+    try {
+      const bot = winner.strategy;
+      const side = winner.signal;
+
+      const canTrade = tradesAllowed;
+      const shouldPaperOnly = !canTrade && NEWS_ONLY_WHEN_CLOSED;
+
+      if (canTrade) {
+        if (side === "BUY") {
+          const pr = await dbQuery(`SELECT cash FROM portfolios WHERE bot=$1`, [bot]);
+          const cash = pr.rows[0] ? Number(pr.rows[0].cash) : START_CASH;
+          const budget = cash * 0.05;
+          const qty = Math.floor((budget / Number(q.price)) * 1000) / 1000;
+
+          if (qty > 0) {
+            executedTrade = await recordTrade({
+              bot,
+              strategy: bot,
+              symbol,
+              side: "BUY",
+              qty,
+              price: Number(q.price),
+              rationale: winner.rationale,
+              confidence: winner.confidence,
+              horizon: winner.horizon,
+              features,
+            });
+            await applyTradeToPortfolio({ bot, symbol, side: "BUY", qty, price: Number(q.price) });
+          }
+        } else if (side === "SELL") {
+          const pos = await dbQuery(`SELECT qty FROM positions WHERE bot=$1 AND symbol=$2`, [bot, symbol]);
+          const held = pos.rows[0] ? Number(pos.rows[0].qty) : 0;
+          const qty = Math.floor((held * 0.25) * 1000) / 1000;
+
+          if (qty > 0) {
+            executedTrade = await recordTrade({
+              bot,
+              strategy: bot,
+              symbol,
+              side: "SELL",
+              qty,
+              price: Number(q.price),
+              rationale: winner.rationale,
+              confidence: winner.confidence,
+              horizon: winner.horizon,
+              features,
+            });
+            await applyTradeToPortfolio({ bot, symbol, side: "SELL", qty, price: Number(q.price) });
+          }
+        } else {
+          executedTrade = await recordTrade({
+            bot,
+            strategy: bot,
+            symbol,
+            side: "HOLD",
+            qty: 0,
+            price: Number(q.price),
+            rationale: winner.rationale,
+            confidence: winner.confidence,
+            horizon: winner.horizon,
+            features,
+          });
+        }
+      } else if (shouldPaperOnly) {
+        // “News-only mode while closed” => log HOLD trade as a “paper event” without portfolio changes
+        executedTrade = await recordTrade({
+          bot,
+          strategy: bot,
+          symbol,
+          side: "HOLD",
+          qty: 0,
+          price: Number(q.price),
+          rationale: `Market closed (${market.reason}). Paper mode: ${winner.rationale}`,
+          confidence: winner.confidence,
+          horizon: winner.horizon,
+          features,
+        });
+      }
+
+      await emitEvent("bot_fight", {
+        symbol,
+        market,
+        tradesAllowed,
+        features,
+        bots,
+        winner: winner.strategy,
+        tradeId: executedTrade?.id ?? null,
+      });
+    } catch (e) {
+      await emitEvent("runner_error", { symbol, error: e.message || String(e) });
+    }
+  }
+}
+
+async function runnerLoop() {
+  if (!hasDb) return;
+  await ensurePortfolios();
+  await emitEvent("server_booted", { ok: true });
+
+  setInterval(async () => {
+    try {
+      await runnerTick();
+      await evaluateLearningSamples();
+      await emitEvent("runner_state", await getRunnerState());
+    } catch (e) {
+      await emitEvent("runner_error", { error: e.message || String(e) });
+    }
+  }, RUNNER_INTERVAL_SEC * 1000);
+}
+
+if (RUNNER_ENABLED) {
+  runnerLoop().catch(() => {});
+}
