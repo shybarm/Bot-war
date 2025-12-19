@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Runner Status</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body{background:#060712;color:#e7e9ff}
+    .chip{border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04)}
+    .btn{border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04)}
+    .btn:hover{background:rgba(255,255,255,0.06)}
+    pre{white-space:pre-wrap;word-break:break-word}
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-4xl mx-auto px-5 py-10">
+    <div class="flex items-center justify-between gap-3">
+      <div>
+        <div class="text-3xl font-bold">Runner Status</div>
+        <div class="opacity-70 mt-1">Live config + market gate + runner cursor.</div>
+      </div>
+      <div class="flex gap-2">
+        <a class="btn px-4 py-2 rounded-xl text-sm" href="/">← Arena</a>
+        <a class="btn px-4 py-2 rounded-xl text-sm" href="/war-room.html">⚔️ War Room</a>
+      </div>
+    </div>
+
+    <div class="chip rounded-2xl p-5 mt-6">
+      <div class="flex items-center justify-between">
+        <div class="font-semibold">/api/runner/status</div>
+        <span id="ts" class="opacity-70 text-xs">—</span>
+      </div>
+      <pre id="out" class="mt-4 text-sm opacity-90">Loading…</pre>
+    </div>
+  </div>
+
+<script>
+  async function load(){
+    const r = await fetch("/api/runner/status");
+    const j = await r.json();
+    document.getElementById("ts").textContent = new Date().toLocaleString();
+    document.getElementById("out").textContent = JSON.stringify(j, null, 2);
+  }
+  load();
+  setInterval(load, 5000);
+</script>
+</body>
+</html>
