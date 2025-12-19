@@ -1,17 +1,17 @@
-// db.js (ESM) — Phase A FINAL
+// db.js (ESM) — FULL COMPAT + SAFE MIGRATIONS
 import pg from "pg";
 const { Pool } = pg;
 
 function buildPoolConfig() {
-  const cs = process.env.DATABASE_URL;
-  if (!cs) return null;
-  return {
-    connectionString: cs,
-    ssl:
-      process.env.PGSSL_DISABLE === "true"
-        ? false
-        : { rejectUnauthorized: false },
-  };
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) return null;
+
+  const ssl =
+    process.env.PGSSL_DISABLE === "true"
+      ? false
+      : { rejectUnauthorized: false };
+
+  return { connectionString, ssl };
 }
 
 const poolConfig = buildPoolConfig();
@@ -19,14 +19,22 @@ export const hasDb = !!poolConfig;
 export const pool = hasDb ? new Pool(poolConfig) : null;
 
 export async function dbQuery(sql, params = []) {
-  if (!hasDb) throw new Error("DATABASE_URL not set");
+  if (!hasDb) throw new Error("DB not configured (DATABASE_URL missing)");
   return pool.query(sql, params);
 }
 
-export async function dbInit() {
-  if (!hasDb) return;
-
-  // ---------- CORE TABLES ----------
+/**
+ * Trades table has evolved over time.
+ * This migration is SAFE + IDEMPOTENT (can run on every boot).
+ * It prevents:
+ * - column "ts" does not exist
+ * - column "bot" does not exist
+ * - column "rationale" does not exist
+ * - null value in column "strategy" violates not-null constraint
+ * - missing confidence/horizon/features columns
+ */
+async function migrateTradesSchema() {
+  // Ensure table exists (fresh installs)
   await dbQuery(`
     CREATE TABLE IF NOT EXISTS trades (
       id BIGSERIAL PRIMARY KEY,
@@ -44,32 +52,41 @@ export async function dbInit() {
     );
   `);
 
-  // ---------- SAFE MIGRATIONS ----------
-  await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS ts TIMESTAMPTZ NOT NULL DEFAULT NOW();`);
+  // Add missing columns for legacy installs
+  await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS ts TIMESTAMPTZ;`);
   await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS bot TEXT;`);
   await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS strategy TEXT;`);
+  await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS symbol TEXT;`);
+  await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS side TEXT;`);
+  await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS qty NUMERIC NOT NULL DEFAULT 0;`);
+  await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS price NUMERIC NOT NULL DEFAULT 0;`);
   await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale TEXT NOT NULL DEFAULT '';`);
   await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS confidence INT NOT NULL DEFAULT 50;`);
   await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS horizon TEXT NOT NULL DEFAULT 'medium';`);
   await dbQuery(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS features JSONB NOT NULL DEFAULT '{}'::jsonb;`);
 
-  // ---------- BACKFILL ----------
-  await dbQuery(`
-    UPDATE trades
-    SET bot = COALESCE(bot, 'unknown')
-    WHERE bot IS NULL;
-  `);
+  // Backfill ts if null
+  await dbQuery(`UPDATE trades SET ts = COALESCE(ts, NOW()) WHERE ts IS NULL;`);
 
+  // Backfill bot/strategy to avoid NOT NULL violations
+  await dbQuery(`UPDATE trades SET bot = COALESCE(bot, 'unknown') WHERE bot IS NULL;`);
+
+  // If strategy missing, infer from bot; if still null, use 'unknown'
   await dbQuery(`
     UPDATE trades
     SET strategy = COALESCE(strategy, bot, 'unknown')
     WHERE strategy IS NULL;
   `);
 
-  // ---------- ENFORCE (SAFE) ----------
+  // Enforce NOT NULL safely (never crash boot if edge cases remain)
   await dbQuery(`
     DO $$
     BEGIN
+      BEGIN
+        ALTER TABLE trades ALTER COLUMN ts SET NOT NULL;
+      EXCEPTION WHEN others THEN NULL;
+      END;
+
       BEGIN
         ALTER TABLE trades ALTER COLUMN bot SET NOT NULL;
       EXCEPTION WHEN others THEN NULL;
@@ -82,17 +99,55 @@ export async function dbInit() {
     END $$;
   `);
 
-  // ---------- EVENTS ----------
+  // Defaults for columns used by /api/trades/recent
+  await dbQuery(`UPDATE trades SET rationale = COALESCE(rationale, '') WHERE rationale IS NULL;`);
+  await dbQuery(`UPDATE trades SET confidence = COALESCE(confidence, 50) WHERE confidence IS NULL;`);
+  await dbQuery(`UPDATE trades SET horizon = COALESCE(horizon, 'medium') WHERE horizon IS NULL;`);
+  await dbQuery(`UPDATE trades SET features = COALESCE(features, '{}'::jsonb) WHERE features IS NULL;`);
+}
+
+export async function dbInit() {
+  if (!hasDb) return;
+
   await dbQuery(`
-    CREATE TABLE IF NOT EXISTS events (
-      id BIGSERIAL PRIMARY KEY,
-      ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      type TEXT NOT NULL,
-      payload JSONB NOT NULL DEFAULT '{}'::jsonb
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
 
-  // ---------- LEARNING ----------
+  await dbQuery(`
+    CREATE TABLE IF NOT EXISTS runner_state (
+      id TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await dbQuery(`
+    CREATE TABLE IF NOT EXISTS portfolios (
+      bot TEXT PRIMARY KEY,
+      cash NUMERIC NOT NULL,
+      goal NUMERIC NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await dbQuery(`
+    CREATE TABLE IF NOT EXISTS positions (
+      bot TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      qty NUMERIC NOT NULL DEFAULT 0,
+      avg_price NUMERIC NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (bot, symbol)
+    );
+  `);
+
+  await migrateTradesSchema();
+
   await dbQuery(`
     CREATE TABLE IF NOT EXISTS learning_samples (
       id BIGSERIAL PRIMARY KEY,
@@ -100,8 +155,8 @@ export async function dbInit() {
       bot TEXT NOT NULL,
       strategy TEXT NOT NULL,
       symbol TEXT NOT NULL,
-      signal TEXT NOT NULL,
-      horizon TEXT NOT NULL,
+      signal TEXT NOT NULL CHECK (signal IN ('BUY','SELL','HOLD')),
+      horizon TEXT NOT NULL DEFAULT 'medium',
       price_at_signal NUMERIC NOT NULL,
       features JSONB NOT NULL DEFAULT '{}'::jsonb,
       rationale TEXT NOT NULL DEFAULT '',
@@ -113,4 +168,123 @@ export async function dbInit() {
       correct BOOLEAN
     );
   `);
+
+  await dbQuery(`
+    CREATE TABLE IF NOT EXISTS events (
+      id BIGSERIAL PRIMARY KEY,
+      ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      type TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb
+    );
+  `);
+
+  await dbQuery(`
+    CREATE TABLE IF NOT EXISTS model_weights (
+      strategy TEXT NOT NULL,
+      feature TEXT NOT NULL,
+      weight NUMERIC NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY(strategy, feature)
+    );
+  `);
+
+  // Defaults (safe)
+  await dbQuery(`
+    INSERT INTO settings(key, value)
+    VALUES ('learning_speed', '{"mode":"realtime","evalAfterSec":3600}'::jsonb)
+    ON CONFLICT (key) DO NOTHING;
+  `);
+
+  await dbQuery(`
+    INSERT INTO settings(key, value)
+    VALUES ('universe', '{"mode":"any","custom":[]}'::jsonb)
+    ON CONFLICT (key) DO NOTHING;
+  `);
+
+  await dbQuery(`
+    INSERT INTO runner_state(id, value)
+    VALUES ('main', '{"idx":0,"lastTick":null,"lastSymbol":"AAPL"}'::jsonb)
+    ON CONFLICT (id) DO NOTHING;
+  `);
+
+  // Initialize weights (safe)
+  const strategies = ["sp500_long", "market_swing", "day_trade", "news_only"];
+  const features = ["bias", "avgSent", "changePercent"];
+  for (const s of strategies) {
+    for (const f of features) {
+      await dbQuery(
+        `
+        INSERT INTO model_weights(strategy, feature, weight)
+        VALUES ($1,$2,0)
+        ON CONFLICT (strategy, feature) DO NOTHING
+      `,
+        [s, f]
+      );
+    }
+  }
+}
+
+export async function getSetting(key) {
+  if (!hasDb) return null;
+  const r = await dbQuery(`SELECT value FROM settings WHERE key=$1`, [key]);
+  return r.rows?.[0]?.value ?? null;
+}
+
+export async function setSetting(key, valueObj) {
+  if (!hasDb) return null;
+  await dbQuery(
+    `
+    INSERT INTO settings(key, value, updated_at)
+    VALUES ($1, $2::jsonb, NOW())
+    ON CONFLICT (key)
+    DO UPDATE SET value=$2::jsonb, updated_at=NOW();
+  `,
+    [key, JSON.stringify(valueObj)]
+  );
+  return valueObj;
+}
+
+export async function getRunnerState() {
+  if (!hasDb) return { idx: 0, lastTick: null, lastSymbol: "AAPL" };
+  const r = await dbQuery(`SELECT value FROM runner_state WHERE id='main'`);
+  return r.rows?.[0]?.value ?? { idx: 0, lastTick: null, lastSymbol: "AAPL" };
+}
+
+export async function setRunnerState(valueObj) {
+  if (!hasDb) return valueObj;
+  await dbQuery(
+    `
+    INSERT INTO runner_state(id, value, updated_at)
+    VALUES ('main', $1::jsonb, NOW())
+    ON CONFLICT (id)
+    DO UPDATE SET value=$1::jsonb, updated_at=NOW();
+  `,
+    [JSON.stringify(valueObj)]
+  );
+  return valueObj;
+}
+
+export async function getWeights(strategy) {
+  if (!hasDb) return { bias: 0, avgSent: 0, changePercent: 0 };
+  const r = await dbQuery(
+    `SELECT feature, weight FROM model_weights WHERE strategy=$1`,
+    [strategy]
+  );
+  const out = { bias: 0, avgSent: 0, changePercent: 0 };
+  for (const row of r.rows || []) out[row.feature] = Number(row.weight || 0);
+  return out;
+}
+
+export async function setWeight(strategy, feature, weight) {
+  if (!hasDb) return null;
+  await dbQuery(
+    `
+    INSERT INTO model_weights(strategy, feature, weight, updated_at)
+    VALUES ($1,$2,$3,NOW())
+    ON CONFLICT (strategy, feature)
+    DO UPDATE SET weight=$3, updated_at=NOW()
+  `,
+    [strategy, feature, weight]
+  );
+  return true;
 }
