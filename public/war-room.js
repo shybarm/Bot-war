@@ -1,120 +1,148 @@
-// public/war-room.js
 const $ = (id) => document.getElementById(id);
-
-function setWsStatus(txt) {
-  $("wsStatus").textContent = txt;
-}
-
-function fmtTime(ts) {
-  if (!ts) return "—";
-  try { return new Date(ts).toLocaleTimeString(); } catch { return "—"; }
-}
 
 async function getJSON(url, opts) {
   const r = await fetch(url, opts);
-  const t = await r.text();
-  let j;
-  try { j = JSON.parse(t); } catch { j = { raw: t }; }
-  if (!r.ok) throw new Error(j.error || j.errorDetail || t || "Request failed");
-  return j;
+  const txt = await r.text();
+  try { return JSON.parse(txt); }
+  catch { throw new Error(`Non-JSON from ${url}: ${txt.slice(0, 120)}`); }
 }
 
-function bankrollCardRow(p) {
-  const cash = Number(p.cash || 0);
-  const goal = Number(p.goal || 150000);
-  const pct = goal ? Math.max(0, Math.min(100, (cash / goal) * 100)) : 0;
-
-  return `
-    <div class="bankCard" data-bot="${p.bot}">
-      <div class="row">
-        <div style="font-weight:900">${p.bot}</div>
-        <div class="muted">$${cash.toFixed(0)}</div>
-      </div>
-      <div class="bar"><div style="width:${pct.toFixed(1)}%"></div></div>
-      <div class="muted" style="margin-top:8px;font-size:12px;">${pct.toFixed(1)}% to goal</div>
-    </div>
-  `;
+function setWsStatus(text) {
+  $("wsStatus").textContent = text;
 }
 
-function renderBankroll(items) {
-  const box = $("bankrollGrid");
-  if (!items || !items.length) {
-    box.innerHTML = `<div class="muted">No portfolios yet (runner will create them).</div>`;
-    return;
-  }
-  box.innerHTML = items.map(bankrollCardRow).join("");
-  box.querySelectorAll("[data-bot]").forEach((el) => {
-    el.addEventListener("click", () => openDrawer(el.getAttribute("data-bot")));
-  });
+function pushEventLine(text) {
+  const box = $("eventStream");
+  if (box.querySelector(".muted") && box.children.length === 1) box.innerHTML = "";
+
+  const div = document.createElement("div");
+  div.className = "chip rounded-xl px-3 py-2 text-xs";
+  div.textContent = text;
+  box.prepend(div);
+
+  while (box.children.length > 80) box.removeChild(box.lastChild);
 }
 
 function renderTrades(items) {
   const tb = $("tradeStreamBody");
   if (!items || !items.length) {
-    tb.innerHTML = `<tr><td class="muted" colspan="7">No trades yet.</td></tr>`;
+    tb.innerHTML = `<tr class="muted"><td class="py-3" colspan="7">No trades yet.</td></tr>`;
     return;
   }
-  tb.innerHTML = items.map((t) => `
-    <tr>
-      <td class="muted">${fmtTime(t.ts)}</td>
-      <td>${t.bot}</td>
-      <td>${t.side}</td>
-      <td>${t.symbol}</td>
-      <td>${Number(t.qty || 0).toFixed(0)}</td>
-      <td>$${Number(t.price || 0).toFixed(2)}</td>
-      <td class="muted" title="${String(t.rationale || "").replaceAll('"','&quot;')}">${String(t.rationale || "").slice(0, 120)}</td>
+  tb.innerHTML = items.slice(0, 25).map(t => `
+    <tr class="border-t border-white/5">
+      <td class="py-2 pr-3 muted">${new Date(t.ts).toLocaleString()}</td>
+      <td class="py-2 pr-3">${t.bot}</td>
+      <td class="py-2 pr-3">${t.side}</td>
+      <td class="py-2 pr-3">${t.symbol}</td>
+      <td class="py-2 pr-3">${Number(t.qty || 0).toFixed(3)}</td>
+      <td class="py-2 pr-3">$${Number(t.price || 0).toFixed(2)}</td>
+      <td class="py-2 muted">${t.rationale || ""}</td>
     </tr>
   `).join("");
 }
 
-function pushEventLine(text, ts) {
-  const box = $("eventStream");
-  const div = document.createElement("div");
-  div.className = "evtLine";
-  div.textContent = `${fmtTime(ts)}  ${text}`;
-  box.appendChild(div);
-  box.scrollTop = box.scrollHeight;
-}
-
-function formatEvent(msg) {
-  if (msg.type === "carousel_tick") {
-    const m = msg.payload?.market;
-    return `♻ Carousel → ${msg.payload?.symbol} • Market: ${m?.open ? "OPEN" : "CLOSED"} (${m?.reason || ""})`;
-  }
-  if (msg.type === "bot_fight") {
-    return `⚔ Fight: ${msg.payload?.symbol} • winner=${msg.payload?.winner} • trades=${msg.payload?.tradesAllowed ? "YES" : "NO"} • news=${msg.payload?.features?.newsProvider || "—"}`;
-  }
-  if (msg.type === "trade_recorded") {
-    return `💸 Trade: ${msg.payload?.bot} ${msg.payload?.side} ${msg.payload?.symbol} @ ${msg.payload?.price}`;
-  }
-  if (msg.type === "learning_evaluated") {
-    return `🧠 Learning evaluated: ${msg.payload?.evaluated || 0} samples`;
-  }
-  if (msg.type === "server_booted") {
-    return `✅ Server booted (${msg.payload?.version || ""})`;
-  }
-  if (msg.type === "runner_error") {
-    return `⚠ Runner error: ${msg.payload?.symbol || ""} • ${msg.payload?.error || ""}`;
-  }
-  return `${msg.type}`;
-}
-
-async function hydrateEventsFromDb() {
-  const box = $("eventStream");
-  box.innerHTML = "";
-
-  const lastSeen = Number(localStorage.getItem("warroom_last_event_id") || 0);
-  const r = await getJSON(`/api/events/recent?limit=220&afterId=${lastSeen}`);
-  const items = r.items || [];
-
-  if (!items.length) {
-    box.innerHTML = `<div class="muted">Waiting for events…</div>`;
+function renderBankroll(items) {
+  const box = $("bankrollBox");
+  if (!items || !items.length) {
+    box.innerHTML = `<div class="muted">—</div>`;
     return;
   }
 
-  for (const e of items) {
-    pushEventLine(formatEvent(e), e.ts);
-    if (e.id) localStorage.setItem("warroom_last_event_id", String(e.id));
+  box.innerHTML = items.map(p => {
+    const cash = Number(p.cash);
+    const goal = Number(p.goal);
+    const pct = Math.max(0, Math.min(100, (cash / goal) * 100));
+    return `
+      <button data-bot="${p.bot}" class="botCard chip rounded-2xl p-4 text-left hover:opacity-95">
+        <div class="flex items-center justify-between">
+          <div class="font-semibold">${p.bot}</div>
+          <div class="text-xs muted">$${cash.toFixed(2)}</div>
+        </div>
+        <div class="mt-3 h-2 rounded-full bg-white/10 overflow-hidden">
+          <div style="width:${pct}%" class="h-2 bg-gradient-to-r from-indigo-500 to-fuchsia-500"></div>
+        </div>
+        <div class="mt-2 text-xs muted">Progress to $${goal.toFixed(0)} • ${pct.toFixed(1)}%</div>
+      </button>
+    `;
+  }).join("");
+
+  // Hook clicks (drawer)
+  document.querySelectorAll(".botCard").forEach(el => {
+    el.addEventListener("click", () => openBotDrawer(el.getAttribute("data-bot")));
+  });
+}
+
+async function refreshWarRoom() {
+  const p = await getJSON("/api/portfolios");
+  renderBankroll(p.items || []);
+
+  const t = await getJSON("/api/trades/recent?limit=25");
+  renderTrades(t.items || []);
+
+  const r = await getJSON("/api/runner/status");
+  $("runnerInfo").innerHTML = `
+    <div><b>Enabled:</b> ${r.enabled ? "YES" : "NO"}</div>
+    <div><b>Interval:</b> ${r.intervalSec}s</div>
+    <div><b>Market:</b> ${r.market.open ? "OPEN" : "CLOSED"} (${r.market.reason})</div>
+    <div><b>News-only when closed:</b> ${r.newsOnlyWhenClosed ? "YES" : "NO"}</div>
+    <div><b>Universe:</b> ${r.universe.mode}${r.universe.mode==="custom" ? ` (${(r.universe.custom||[]).length})` : ""}</div>
+    <div><b>Last symbol:</b> ${r.state.lastSymbol || "—"}</div>
+    <div><b>Next symbol:</b> ${r.nextSymbol || "—"}</div>
+  `;
+}
+
+// Drawer
+function showDrawer(open) {
+  const d = $("botDrawer");
+  if (!d) return;
+  d.classList.toggle("hidden", !open);
+}
+
+async function openBotDrawer(bot) {
+  showDrawer(true);
+  $("drawerTitle").textContent = `Bot: ${bot}`;
+  $("drawerBody").innerHTML = `<div class="muted">Loading…</div>`;
+
+  try {
+    const data = await getJSON(`/api/trades/bot/${encodeURIComponent(bot)}?limit=100`);
+    const items = data.items || [];
+
+    if (!items.length) {
+      $("drawerBody").innerHTML = `<div class="muted">No trades yet for ${bot}.</div>`;
+      return;
+    }
+
+    $("drawerBody").innerHTML = `
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="muted">
+            <tr class="text-left">
+              <th class="py-2 pr-3">Time</th>
+              <th class="py-2 pr-3">Side</th>
+              <th class="py-2 pr-3">Symbol</th>
+              <th class="py-2 pr-3">Qty</th>
+              <th class="py-2 pr-3">Price</th>
+              <th class="py-2">Why</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map(t => `
+              <tr class="border-t border-white/5">
+                <td class="py-2 pr-3 muted">${new Date(t.ts).toLocaleString()}</td>
+                <td class="py-2 pr-3">${t.side}</td>
+                <td class="py-2 pr-3">${t.symbol}</td>
+                <td class="py-2 pr-3">${Number(t.qty||0).toFixed(3)}</td>
+                <td class="py-2 pr-3">$${Number(t.price||0).toFixed(2)}</td>
+                <td class="py-2 muted">${t.rationale || ""}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (e) {
+    $("drawerBody").innerHTML = `<div class="text-sm text-red-200">Error: ${e.message}</div>`;
   }
 }
 
@@ -123,98 +151,47 @@ function connectWS() {
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
 
   ws.onopen = () => setWsStatus("WS: live ✅");
-  ws.onclose = () => setWsStatus("WS: closed ⚠️");
+  ws.onclose = () => setWsStatus("WS: closed (refresh) ⚠️");
   ws.onerror = () => setWsStatus("WS: error ⚠️");
 
   ws.onmessage = async (ev) => {
     try {
       const msg = JSON.parse(ev.data);
-      $("lastEvent").textContent = formatEvent(msg);
-      if (msg.type === "carousel_tick") $("curSymbol").textContent = msg.payload?.symbol || "—";
-      pushEventLine(formatEvent(msg), msg.ts);
+      $("lastEvent").textContent = `${msg.type} • ${new Date(msg.ts).toLocaleTimeString()}`;
 
-      if (msg.id) localStorage.setItem("warroom_last_event_id", String(msg.id));
-      if (["trade_recorded", "bot_fight", "runner_state"].includes(msg.type)) {
-        await refreshPanels();
+      if (msg.type === "carousel_tick") {
+        $("carouselSymbol").textContent = msg.payload?.symbol || "—";
+        const m = msg.payload?.market;
+        pushEventLine(`♻ Carousel → ${msg.payload?.symbol} • Market: ${m?.open ? "OPEN" : "CLOSED"} (${m?.reason || ""})`);
+      }
+
+      if (msg.type === "bot_fight") {
+        const sym = msg.payload?.symbol;
+        const winner = msg.payload?.winner;
+        const allowed = msg.payload?.tradesAllowed;
+        const np = msg.payload?.newsProvider;
+        pushEventLine(`⚔️ Fight: ${sym} • winner=${winner} • trades=${allowed ? "YES" : "NO"} • news=${np}`);
+        await refreshWarRoom();
+      }
+
+      if (msg.type === "learning_evaluated") {
+        pushEventLine(`🧠 Learning evaluated: ${msg.payload?.evaluated || 0} samples`);
+      }
+
+      if (msg.type === "runner_error") {
+        pushEventLine(`⚠ Runner error: ${msg.payload?.symbol || "—"} • ${msg.payload?.error || "unknown"}`);
       }
     } catch {}
   };
+
+  return ws;
 }
 
-async function refreshPanels() {
-  try {
-    const p = await getJSON("/api/portfolios");
-    renderBankroll(p.items || []);
-  } catch {}
+(function init() {
+  const closeBtn = $("drawerClose");
+  if (closeBtn) closeBtn.addEventListener("click", () => showDrawer(false));
 
-  try {
-    const t = await getJSON("/api/trades/recent?limit=25");
-    renderTrades(t.items || []);
-  } catch (e) {
-    $("tradeStreamBody").innerHTML = `<tr><td class="muted" colspan="7">Trades error: ${String(e.message || e)}</td></tr>`;
-  }
-
-  try {
-    const r = await getJSON("/api/runner/status");
-    $("runnerInfo").innerHTML = `
-      <div><b>Enabled:</b> ${r.enabled ? "YES" : "NO"}</div>
-      <div><b>Interval:</b> ${r.intervalSec}s</div>
-      <div><b>Market:</b> ${r.market.open ? "OPEN" : "CLOSED"} (${r.market.reason})</div>
-      <div><b>News-only when closed:</b> ${r.newsOnlyWhenClosed ? "YES" : "NO"}</div>
-      <div><b>Universe:</b> ${r.universe.mode}${r.universe.mode==="custom" ? ` (${(r.universe.custom||[]).length})` : ""}</div>
-      <div><b>Last symbol:</b> ${r.state.lastSymbol || "—"}</div>
-      <div><b>Next symbol:</b> ${r.nextSymbol || "—"}</div>
-    `;
-  } catch {
-    $("runnerInfo").textContent = "Runner status unavailable.";
-  }
-}
-
-// Drawer
-function openDrawer(bot) {
-  $("drawerBack").style.display = "block";
-  $("drawer").classList.add("open");
-  $("drawerTitle").textContent = `Bot: ${bot}`;
-  $("drawerSub").textContent = "Trade history";
-  loadDrawer(bot);
-}
-
-function closeDrawer() {
-  $("drawerBack").style.display = "none";
-  $("drawer").classList.remove("open");
-}
-
-async function loadDrawer(bot) {
-  const body = $("drawerBody");
-  body.innerHTML = `<tr><td class="muted" colspan="5">Loading…</td></tr>`;
-
-  try {
-    const out = await getJSON(`/api/trades/bot/${encodeURIComponent(bot)}?limit=120`);
-    const items = out.items || [];
-    if (!items.length) {
-      body.innerHTML = `<tr><td class="muted" colspan="5">No trades yet.</td></tr>`;
-      return;
-    }
-    body.innerHTML = items.map((t) => `
-      <tr>
-        <td class="muted">${fmtTime(t.ts)}</td>
-        <td>${t.side}</td>
-        <td>${t.symbol}</td>
-        <td>${Number(t.qty || 0).toFixed(0)}</td>
-        <td>$${Number(t.price || 0).toFixed(2)}</td>
-      </tr>
-    `).join("");
-  } catch (e) {
-    body.innerHTML = `<tr><td class="muted" colspan="5">Error: ${String(e.message || e)}</td></tr>`;
-  }
-}
-
-$("drawerClose").onclick = closeDrawer;
-$("drawerBack").onclick = closeDrawer;
-
-(async function boot() {
-  await hydrateEventsFromDb();
-  await refreshPanels();
+  refreshWarRoom().catch(() => {});
   connectWS();
-  setInterval(refreshPanels, 7000);
+  setInterval(() => refreshWarRoom().catch(() => {}), 15000);
 })();
