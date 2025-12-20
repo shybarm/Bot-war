@@ -23,25 +23,23 @@ export async function dbQuery(sql, params = []) {
   return pool.query(sql, params);
 }
 
-async function columnExists(table, column) {
-  const r = await dbQuery(
-    `
-    SELECT 1
-    FROM information_schema.columns
-    WHERE table_schema='public'
-      AND table_name=$1
-      AND column_name=$2
-    LIMIT 1
-  `,
-    [table, column]
-  );
-  return r.rowCount > 0;
+// Run a statement but NEVER crash boot if a migration fails (keeps Railway alive)
+async function tryQuery(sql) {
+  if (!hasDb) return;
+  try {
+    await dbQuery(sql);
+  } catch (e) {
+    // Swallow migrations errors (schema drift) to prevent 502 crashes.
+    // You can still see issues via /api/health.
+    console.log("[dbInit] migration skipped:", e.message);
+  }
 }
 
 export async function dbInit() {
   if (!hasDb) return;
 
-  await dbQuery(`
+  // Core tables
+  await tryQuery(`
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value JSONB NOT NULL,
@@ -49,7 +47,7 @@ export async function dbInit() {
     );
   `);
 
-  await dbQuery(`
+  await tryQuery(`
     CREATE TABLE IF NOT EXISTS runner_state (
       id TEXT PRIMARY KEY,
       value JSONB NOT NULL,
@@ -57,48 +55,17 @@ export async function dbInit() {
     );
   `);
 
-  await dbQuery(`
-    CREATE TABLE IF NOT EXISTS portfolios (
-      bot TEXT PRIMARY KEY,
-      cash NUMERIC NOT NULL,
-      goal NUMERIC NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
-
-  await dbQuery(`
-    CREATE TABLE IF NOT EXISTS positions (
-      bot TEXT NOT NULL,
-      symbol TEXT NOT NULL,
-      qty NUMERIC NOT NULL DEFAULT 0,
-      avg_price NUMERIC NOT NULL DEFAULT 0,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      PRIMARY KEY (bot, symbol)
-    );
-  `);
-
-  // -----------------------------
-  // IMPORTANT: Use trades_v2 (avoid old/conflicting trades schema)
-  // -----------------------------
-  await dbQuery(`
-    CREATE TABLE IF NOT EXISTS trades_v2 (
+  await tryQuery(`
+    CREATE TABLE IF NOT EXISTS events (
       id BIGSERIAL PRIMARY KEY,
       ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      bot TEXT NOT NULL,
-      symbol TEXT NOT NULL,
-      side TEXT NOT NULL CHECK (side IN ('BUY','SELL','HOLD')),
-      qty NUMERIC NOT NULL DEFAULT 0,
-      price NUMERIC NOT NULL DEFAULT 0,
-      rationale TEXT NOT NULL DEFAULT '',
-      confidence INT NOT NULL DEFAULT 50,
-      horizon TEXT NOT NULL DEFAULT 'medium',
-      features JSONB NOT NULL DEFAULT '{}'::jsonb
+      type TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb
     );
   `);
 
-  // Learning samples (persistent)
-  await dbQuery(`
+  // Learning
+  await tryQuery(`
     CREATE TABLE IF NOT EXISTS learning_samples (
       id BIGSERIAL PRIMARY KEY,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -119,17 +86,7 @@ export async function dbInit() {
     );
   `);
 
-  await dbQuery(`
-    CREATE TABLE IF NOT EXISTS events (
-      id BIGSERIAL PRIMARY KEY,
-      ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      type TEXT NOT NULL,
-      payload JSONB NOT NULL DEFAULT '{}'::jsonb
-    );
-  `);
-
-  // Online learning model weights (simple logistic regression)
-  await dbQuery(`
+  await tryQuery(`
     CREATE TABLE IF NOT EXISTS model_weights (
       strategy TEXT NOT NULL,
       feature TEXT NOT NULL,
@@ -139,39 +96,84 @@ export async function dbInit() {
     );
   `);
 
+  // ✅ Bot-first schema (the only one we will use)
+  await tryQuery(`
+    CREATE TABLE IF NOT EXISTS bot_accounts (
+      bot TEXT PRIMARY KEY,
+      cash NUMERIC NOT NULL DEFAULT 100000,
+      goal NUMERIC NOT NULL DEFAULT 150000,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await tryQuery(`
+    CREATE TABLE IF NOT EXISTS bot_positions (
+      bot TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      qty NUMERIC NOT NULL DEFAULT 0,
+      avg_price NUMERIC NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (bot, symbol)
+    );
+  `);
+
+  await tryQuery(`
+    CREATE TABLE IF NOT EXISTS bot_trades (
+      id BIGSERIAL PRIMARY KEY,
+      ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      bot TEXT NOT NULL,
+      strategy TEXT NOT NULL DEFAULT '',
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL CHECK (side IN ('BUY','SELL','HOLD')),
+      qty NUMERIC NOT NULL DEFAULT 0,
+      price NUMERIC NOT NULL DEFAULT 0,
+      rationale TEXT NOT NULL DEFAULT '',
+      confidence INT NOT NULL DEFAULT 50,
+      horizon TEXT NOT NULL DEFAULT 'medium',
+      market_open BOOLEAN NOT NULL DEFAULT FALSE,
+      features JSONB NOT NULL DEFAULT '{}'::jsonb
+    );
+  `);
+
+  // If bot_trades already existed with missing columns, ensure they exist
+  await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS strategy TEXT NOT NULL DEFAULT '';`);
+  await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS rationale TEXT NOT NULL DEFAULT '';`);
+  await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS confidence INT NOT NULL DEFAULT 50;`);
+  await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS horizon TEXT NOT NULL DEFAULT 'medium';`);
+  await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS market_open BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS features JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+  await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS ts TIMESTAMPTZ NOT NULL DEFAULT NOW();`);
+
   // Defaults
-  await dbQuery(`
+  await tryQuery(`
     INSERT INTO settings(key, value)
     VALUES ('learning_speed', '{"mode":"realtime","evalAfterSec":3600}'::jsonb)
     ON CONFLICT (key) DO NOTHING;
   `);
 
-  await dbQuery(`
+  await tryQuery(`
     INSERT INTO settings(key, value)
-    VALUES ('universe', '{"mode":"any","custom":[]}'::jsonb)
+    VALUES ('universe', '{"mode":"auto","custom":[]}'::jsonb)
     ON CONFLICT (key) DO NOTHING;
   `);
 
-  await dbQuery(`
+  await tryQuery(`
     INSERT INTO runner_state(id, value)
     VALUES ('main', '{"idx":0,"lastTick":null,"lastSymbol":"AAPL"}'::jsonb)
     ON CONFLICT (id) DO NOTHING;
   `);
 
-  // Initialize weights for all strategies and base features
+  // Initialize weights
   const strategies = ["sp500_long", "market_swing", "day_trade", "news_only"];
   const features = ["bias", "avgSent", "changePercent"];
-
   for (const s of strategies) {
     for (const f of features) {
-      await dbQuery(
-        `
+      await tryQuery(`
         INSERT INTO model_weights(strategy, feature, weight)
-        VALUES ($1,$2,0)
-        ON CONFLICT (strategy, feature) DO NOTHING
-      `,
-        [s, f]
-      );
+        VALUES ('${s}','${f}',0)
+        ON CONFLICT (strategy, feature) DO NOTHING;
+      `);
     }
   }
 }
