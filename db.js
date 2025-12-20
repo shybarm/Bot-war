@@ -23,22 +23,20 @@ export async function dbQuery(sql, params = []) {
   return pool.query(sql, params);
 }
 
-// Run a statement but NEVER crash boot if a migration fails (keeps Railway alive)
+// Never crash boot if schema drift exists
 async function tryQuery(sql) {
   if (!hasDb) return;
   try {
     await dbQuery(sql);
   } catch (e) {
-    // Swallow migrations errors (schema drift) to prevent 502 crashes.
-    // You can still see issues via /api/health.
-    console.log("[dbInit] migration skipped:", e.message);
+    console.log("[dbInit] skipped:", e.message);
   }
 }
 
 export async function dbInit() {
   if (!hasDb) return;
 
-  // Core tables
+  // Core
   await tryQuery(`
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
@@ -96,7 +94,7 @@ export async function dbInit() {
     );
   `);
 
-  // ✅ Bot-first schema (the only one we will use)
+  // ✅ Bot-first schema (this is the only schema we will write/read)
   await tryQuery(`
     CREATE TABLE IF NOT EXISTS bot_accounts (
       bot TEXT PRIMARY KEY,
@@ -136,14 +134,14 @@ export async function dbInit() {
     );
   `);
 
-  // If bot_trades already existed with missing columns, ensure they exist
+  // Ensure columns exist even if older version of bot_trades exists
+  await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS ts TIMESTAMPTZ NOT NULL DEFAULT NOW();`);
   await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS strategy TEXT NOT NULL DEFAULT '';`);
   await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS rationale TEXT NOT NULL DEFAULT '';`);
   await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS confidence INT NOT NULL DEFAULT 50;`);
   await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS horizon TEXT NOT NULL DEFAULT 'medium';`);
   await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS market_open BOOLEAN NOT NULL DEFAULT FALSE;`);
   await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS features JSONB NOT NULL DEFAULT '{}'::jsonb;`);
-  await tryQuery(`ALTER TABLE bot_trades ADD COLUMN IF NOT EXISTS ts TIMESTAMPTZ NOT NULL DEFAULT NOW();`);
 
   // Defaults
   await tryQuery(`
